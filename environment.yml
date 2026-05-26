@@ -1,0 +1,29 @@
+name: NT_analysis
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - scipy
+  - pandas
+  - nibabel
+  - nilearn
+  - scikit-learn
+  - statsmodels
+  - openpyxl
+  - pyyaml
+  - requests
+  - boto3
+  - botocore
+  - datalad
+  - matplotlib
+  - seaborn
+  - tqdm
+  - jupyter
+  - nbconvert
+  - ipykernel
+  - pytest
+  - pip:
+      - xlrd
+      - datalad-osf
