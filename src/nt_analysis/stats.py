@@ -14,6 +14,9 @@ def fit_mass_univariate(
     id_column: str = "subject_id",
 ) -> pd.DataFrame:
     """Fit one OLS model per feature."""
+    missing = [column for column in [id_column, outcome, *covariates] if column not in phenotype.columns]
+    if missing:
+        raise KeyError(f"missing phenotype columns: {missing}")
     merged = phenotype[[id_column, outcome] + covariates].merge(features, on=id_column)
     rows = []
     feature_columns = [c for c in features.columns if c != id_column]

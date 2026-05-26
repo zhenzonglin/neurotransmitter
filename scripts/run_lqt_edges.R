@@ -1,32 +1,57 @@
-project_dir <- "/home/zhenzong2/analysis/neurotransmitter"
 args <- commandArgs(trailingOnly = TRUE)
+get_arg <- function(flag, default = NA_character_) {
+  if (flag %in% args) {
+    return(args[which(args == flag) + 1])
+  }
+  default
+}
+
+config_path <- get_arg("--config", Sys.getenv("NT_CONFIG", unset = "config/dat_config.yaml"))
+config_path <- normalizePath(config_path, mustWork = TRUE)
+project_guess <- dirname(dirname(config_path))
+lib_dir <- file.path(project_guess, "external", "r_libs")
+.libPaths(c(lib_dir, .libPaths()))
+
+if (!requireNamespace("yaml", quietly = TRUE)) {
+  stop("yaml is required. Run scripts/install_lqt_r_deps.R first.")
+}
+config <- yaml::read_yaml(config_path)
+project_dir <- normalizePath(config$project_dir, mustWork = TRUE)
+lib_dir <- file.path(project_dir, "external", "r_libs")
 limit <- NA_integer_
 if ("--limit" %in% args) {
   limit <- as.integer(args[which(args == "--limit") + 1])
+} else if (!is.null(config$lqt$max_subjects)) {
+  limit <- as.integer(config$lqt$max_subjects)
 }
 force <- "--force" %in% args
 
-lib_dir <- file.path(project_dir, "external", "r_libs")
 .libPaths(c(lib_dir, .libPaths()))
 if (!requireNamespace("R.matlab", quietly = TRUE)) {
   stop("R.matlab is required. Run scripts/install_lqt_r_deps.R first.")
 }
 
-dsi_path <- file.path(project_dir, "scripts", "dsi_studio_docker.sh")
-source_path <- file.path(project_dir, "external", "lqt_data", "Tractography_Atlas")
+dsi_path <- file.path(project_dir, config$lqt$dsi_path)
+Sys.setenv(NT_PROJECT_DIR = project_dir)
+mount_root <- config$lqt$docker_mount_root
+if (is.null(mount_root)) {
+  mount_root <- dirname(dirname(project_dir))
+}
+Sys.setenv(NT_DOCKER_MOUNT_ROOT = mount_root)
+source_path <- file.path(project_dir, config$lqt$data_dir, "Tractography_Atlas")
 fib_path <- file.path(source_path, "HCP842_1mm.fib.gz")
 tract_path <- file.path(source_path, "all_tracts_1mm.trk.gz")
-atlas_path <- file.path(project_dir, "atlases", "lqt", "atlas4s156_1mm.nii.gz")
-edge_dir <- file.path(project_dir, "derivatives", "edge_clsm")
+atlas_path <- file.path(project_dir, config$atlases$outputs$atlas4s156_1mm_lqt)
+edge_dir <- file.path(project_dir, config$outputs$edge_dir)
 lqt_dir <- file.path(edge_dir, "lqt_2mm")
 atlas_dir <- file.path(lqt_dir, "Atlas")
 dir.create(edge_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(lqt_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(atlas_dir, recursive = TRUE, showWarnings = FALSE)
 
-nodes <- read.csv(file.path(project_dir, "atlases", "processed", "atlas4s156_lqt_nodes.csv"))
-manifest <- read.csv(file.path(project_dir, "derivatives", "qc", "subject_manifest.csv"))
-dat_roi <- read.csv(file.path(project_dir, "derivatives", "node_clsm", "dat_roi_156.csv"))
+nodes <- read.csv(file.path(project_dir, config$atlases$outputs$atlas4s156_lqt_nodes))
+manifest <- read.csv(file.path(project_dir, config$outputs$qc_dir, "subject_manifest.csv"))
+dat_roi <- read.csv(file.path(project_dir, config$outputs$node_dir, "dat_roi_156.csv"))
 dat_roi <- dat_roi[match(nodes$roi, dat_roi$roi), ]
 dat_weight <- outer(dat_roi$dat_mean, dat_roi$dat_mean)
 roi_count <- nrow(nodes)
@@ -73,7 +98,7 @@ run_dsi <- function(output_dir, roi_path = NULL, allow_empty = FALSE) {
     paste0("--tract=", tract_path),
     paste0("--output=", output_dir),
     paste0("--connectivity=", atlas_path),
-    "--connectivity_type=end",
+    paste0("--connectivity_type=", config$lqt$con_type),
     "--connectivity_threshold=0"
   )
   if (!is.null(roi_arg)) {
@@ -186,6 +211,6 @@ for (col in edge_names) {
   raw_df[[col]] <- as.numeric(raw_df[[col]])
   dat_df[[col]] <- as.numeric(dat_df[[col]])
 }
-write.csv(raw_df, file.path(edge_dir, "lqt_edge_disconnection_66.csv"), row.names = FALSE)
-write.csv(dat_df, file.path(edge_dir, "dat_edge_lqt_66.csv"), row.names = FALSE)
+write.csv(raw_df, file.path(edge_dir, config$analysis$tables$lqt_edge_disconnection), row.names = FALSE)
+write.csv(dat_df, file.path(edge_dir, config$analysis$tables$dat_edge_lqt), row.names = FALSE)
 cat("wrote LQT edge tables\n")

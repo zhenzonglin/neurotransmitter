@@ -12,11 +12,9 @@ atlases/raw/atlaspack_repo/
 atlases/raw/atlaspack_datalad/
 external/*
 !external/sources.lock
-external/nemo_data/
 external/lqt_data/
 external/r_libs/
 external/niistat/
-external/nemo/
 external/bctpy/
 external/lqt/
 derivatives/

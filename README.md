@@ -4,8 +4,7 @@ This repository runs a DAT-focused NT-CLSM pilot for acute ischemic stroke.
 The workflow is lesion-first and uses existing projects for the main analyses:
 NiiStat for node and voxelwise CLSM, LQT-R plus DSI Studio for edge
 disconnectivity, and bctpy/BCT-style correction for network-level edge
-statistics. NeMo code is retained as an optional legacy branch, but it is not
-used in the main analysis.
+statistics.
 
 ## WSL entrypoint
 
@@ -25,18 +24,30 @@ Rscript scripts/install_lqt_r_deps.R
 
 ## Pipeline
 
-```bash
-python scripts/fetch_reference_data.py --config config/dat_config.yaml --all
-python scripts/fetch_lqt_data.py --config config/dat_config.yaml
-python scripts/prepare_inputs.py --config config/dat_config.yaml
-matlab -batch "run('scripts/run_niistat_node_wm.m')"
-Rscript scripts/run_lqt_edges.R
-python scripts/collect_results.py --config config/dat_config.yaml
+First edit and run:
+
+```text
+notebooks/00_project_config.ipynb
 ```
 
-Optional legacy NeMo commands remain in `scripts/run_nemo_edges.py`, but NeMo
-requires authenticated requester-pays S3 access for the database and is no
-longer part of the main DAT-edge pipeline.
+It writes `config/dat_config.yaml`. The scripts below receive all changing
+paths, clinical variables, outcomes, and table names from that file.
 
-Large imaging data, LQT resources, NeMo database files, and derivatives are
-excluded from git.
+```bash
+config_path=config/dat_config.yaml
+python scripts/fetch_reference_data.py --config "${config_path}" --all
+python scripts/fetch_lqt_data.py --config "${config_path}"
+python scripts/prepare_inputs.py --config "${config_path}"
+bash scripts/run_niistat_node_wm.sh --config "${config_path}"
+Rscript scripts/run_lqt_edges.R --config "${config_path}"
+python scripts/collect_results.py --config "${config_path}"
+```
+
+## Configuration
+
+Change working path, input files, outcome, covariates, binary threshold, and
+analysis table names in `notebooks/00_project_config.ipynb`, then rerun its
+write-config cell. The scripts infer cohort size from
+`derivatives/qc/subject_manifest.csv`.
+
+Large imaging data, LQT resources, and derivatives are excluded from git.

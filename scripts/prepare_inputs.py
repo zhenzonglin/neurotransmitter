@@ -14,9 +14,9 @@ from scipy.io import savemat
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from nt_analysis.config import ensure_dir, load_config, project_path
+from nt_analysis.config import analysis_covariates, analysis_table, ensure_dir, load_config, outcome_column, project_path, require_columns
 from nt_analysis.ids import normalize_subject_id, parse_lesion_subject
-from nt_analysis.images import lesion_volume_ml, multiply_images, resample_like, save_img
+from nt_analysis.images import lesion_volume_ml, resample_like, save_img
 from nt_analysis.tables import write_csv
 
 
@@ -25,20 +25,19 @@ def load_phenotype(config: dict) -> pd.DataFrame:
     path = project_path(config, config["inputs"]["phenotype_file"])
     df = pd.read_excel(path, sheet_name=config["inputs"]["phenotype_sheet"])
     id_col = config["inputs"]["phenotype_id_column"]
+    outcome = outcome_column(config)
     df["subject_id"] = df[id_col].map(normalize_subject_id)
-    cov = config["inputs"]["covariates"]
-    rename = {
-        cov["age"]: "age",
-        cov["sex"]: "sex",
-        cov["nihss"]: "nihss",
-        config["inputs"]["outcome_column"]: "mrs_3m",
-    }
+    covariate_map = config["inputs"].get("covariates", {})
+    rename = {source: target for target, source in covariate_map.items()}
+    rename[config["inputs"]["outcome_column"]] = outcome
     df = df.rename(columns=rename)
-    keep = ["subject_id", "age", "sex", "nihss", "mrs_3m"]
+    keep = ["subject_id", outcome, *covariate_map.keys()]
     out = df[[c for c in keep if c in df.columns]].copy()
-    if "sex" in out.columns:
-        out["sex"] = out["sex"].astype(str).str.strip().map({"男": 1, "女": 0, "1": 1, "0": 0}).fillna(out["sex"])
-    for col in ["age", "sex", "nihss", "mrs_3m"]:
+    for col, mapping in config["inputs"].get("categorical_maps", {}).items():
+        if col in out.columns:
+            # 按配置转换分类变量
+            out[col] = out[col].astype(str).str.strip().map(mapping).fillna(out[col])
+    for col in [outcome, *covariate_map.keys()]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
     return out
@@ -124,6 +123,9 @@ def compute_lqt_node_table(config: dict) -> None:
 def compute_node_features(config: dict, manifest: pd.DataFrame, phenotype: pd.DataFrame) -> None:
     """Compute node-level DAT damage features."""
     node_dir = ensure_dir(project_path(config, config["outputs"]["node_dir"]))
+    outcome = outcome_column(config)
+    covariates = analysis_covariates(config, "niistat_covariates")
+    feature_file = analysis_table(config, "node_damage", "dat_node_damage.csv")
     atlas_img = nib.load(str(project_path(config, config["atlases"]["outputs"]["atlas4s156_2mm"])))
     dat_img = nib.load(str(project_path(config, config["atlases"]["outputs"]["dat_gray_2mm"])))
     atlas = np.rint(atlas_img.get_fdata()).astype(int)
@@ -156,16 +158,17 @@ def compute_node_features(config: dict, manifest: pd.DataFrame, phenotype: pd.Da
             values[f"node_{roi:03d}"] = lesion_load * dat_mean
         feature_rows.append(values)
     features = pd.DataFrame(feature_rows)
-    write_csv(features, node_dir / "dat_node_damage_66x156.csv")
+    write_csv(features, node_dir / feature_file)
 
-    required = ["mrs_3m", "age", "sex", "nihss"]
+    required = [outcome, *covariates]
+    require_columns(required, list(phenotype.columns), "phenotype")
     merged = phenotype.merge(features, on="subject_id").dropna(subset=required)
     write_csv(merged[["subject_id", *required]], node_dir / "dat_node_niistat_subjects.csv")
-    nuisance = merged[["age", "sex", "nihss"]].to_numpy(dtype=float)
+    nuisance = merged[covariates].to_numpy(dtype=float) if covariates else np.empty((merged.shape[0], 0))
     mat = {
         "les": merged[[f"node_{roi:03d}" for roi in labels]].to_numpy(dtype=float),
-        "beh": merged[["mrs_3m"]].to_numpy(dtype=float),
-        "beh_names": np.array(["mrs_3m"], dtype=object),
+        "beh": merged[[outcome]].to_numpy(dtype=float),
+        "beh_names": np.array([outcome], dtype=object),
         "nuisance": nuisance,
         "logical_mask": np.ones(len(labels), dtype=bool),
         "roi_names": np.array([f"node_{roi:03d}" for roi in labels], dtype=object),
@@ -176,9 +179,12 @@ def compute_node_features(config: dict, manifest: pd.DataFrame, phenotype: pd.Da
 def prepare_wm_voxel_input(config: dict, manifest: pd.DataFrame, phenotype: pd.DataFrame) -> None:
     """Prepare full-volume DAT-WM voxelwise input for NiiStat core."""
     wm_dir = ensure_dir(project_path(config, config["outputs"]["wm_voxel_dir"]))
+    outcome = outcome_column(config)
+    covariates = analysis_covariates(config, "niistat_covariates")
     mask_img = nib.load(str(project_path(config, config["atlases"]["outputs"]["dat_wm_mask_2mm"])))
     mask = mask_img.get_fdata().ravel() != 0
-    required = ["mrs_3m", "age", "sex", "nihss"]
+    required = [outcome, *covariates]
+    require_columns(required, list(phenotype.columns), "phenotype")
     merged = phenotype.merge(manifest, on="subject_id").dropna(subset=required)
     write_csv(merged[["subject_id", *required]], wm_dir / "dat_wm_voxel_niistat_subjects.csv")
     matrix = np.zeros((merged.shape[0], int(mask.size)), dtype=np.float32)
@@ -191,30 +197,14 @@ def prepare_wm_voxel_input(config: dict, manifest: pd.DataFrame, phenotype: pd.D
         wm_dir / "dat_wm_voxel_niistat_input.mat",
         {
             "les": matrix,
-            "beh": merged[["mrs_3m"]].to_numpy(dtype=float),
-            "beh_names": np.array(["mrs_3m"], dtype=object),
-            "nuisance": merged[["age", "sex", "nihss"]].to_numpy(dtype=float),
+            "beh": merged[[outcome]].to_numpy(dtype=float),
+            "beh_names": np.array([outcome], dtype=object),
+            "nuisance": merged[covariates].to_numpy(dtype=float) if covariates else np.empty((merged.shape[0], 0)),
             "logical_mask": mask.astype(bool),
             "mask_shape": np.array(mask_img.shape, dtype=np.int32),
             "mask_index": np.flatnonzero(mask).astype(np.int64) + 1,
         },
     )
-
-
-def prepare_legacy_nemo_inputs(config: dict, manifest: pd.DataFrame) -> None:
-    """Create 1mm DAT-weighted lesion images for NeMo."""
-    nemo_dir = ensure_dir(project_path(config, config["outputs"]["nemo_dir"]))
-    ref = project_path(config, config["nemo"]["data_dir"], "MNI152_T1_1mm_brain.nii.gz")
-    dat_wm = project_path(config, config["atlases"]["outputs"]["dat_wm_1mm_nemo"])
-    rows = []
-    for row in manifest.itertuples(index=False):
-        subject_dir = ensure_dir(nemo_dir / row.subject_id)
-        lesion_1mm = subject_dir / f"{row.subject_id}_lesion_1mm.nii.gz"
-        weighted = subject_dir / f"{row.subject_id}_dat_weighted_lesion_1mm.nii.gz"
-        resample_like(row.lesion_path, ref, lesion_1mm, "nearest")
-        multiply_images(lesion_1mm, dat_wm, weighted)
-        rows.append({"subject_id": row.subject_id, "lesion_1mm": str(lesion_1mm), "dat_weighted_lesion_1mm": str(weighted)})
-    write_csv(pd.DataFrame(rows), nemo_dir / "nemo_input_manifest.csv")
 
 
 def main() -> None:
@@ -232,7 +222,10 @@ def main() -> None:
     qc_dir = project_path(config, config["outputs"]["qc_dir"])
     write_csv(manifest, qc_dir / "lesion_qc.csv")
     write_csv(merged, qc_dir / "subject_manifest.csv")
-    write_csv(merged[["subject_id", "lesion_path", "mrs_3m", "age", "sex", "nihss"]], qc_dir / "phenotype_merge_qc.csv")
+    outcome = outcome_column(config)
+    covariates = list(config["inputs"].get("covariates", {}).keys())
+    keep = ["subject_id", "lesion_path", outcome, *covariates]
+    write_csv(merged[[column for column in keep if column in merged.columns]], qc_dir / "phenotype_merge_qc.csv")
 
     reference_2mm = Path(manifest.loc[0, "lesion_path"])
     prepare_reference_images(config, reference_2mm)

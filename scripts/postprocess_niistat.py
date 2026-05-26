@@ -14,7 +14,7 @@ from statsmodels.stats.multitest import multipletests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from nt_analysis.config import ensure_dir, load_config, project_path
+from nt_analysis.config import analysis_covariates, analysis_table, ensure_dir, load_config, outcome_column, project_path, require_columns
 from nt_analysis.stats import fit_mass_univariate
 from nt_analysis.tables import write_csv
 
@@ -71,9 +71,12 @@ def beta_from_matrix(features: np.ndarray, outcome: np.ndarray, covariates: np.n
 def node_beta_stats(config: dict) -> pd.DataFrame:
     """Compute true node-level OLS beta values."""
     node_dir = project_path(config, config["outputs"]["node_dir"])
-    features = pd.read_csv(node_dir / "dat_node_damage_66x156.csv")
-    phenotype = pd.read_csv(project_path(config, config["outputs"]["qc_dir"], "subject_manifest.csv")).rename(columns={"mrs_3m": "outcome"})
-    stats = fit_mass_univariate(features, phenotype, "outcome", ["age", "sex", "nihss"])
+    feature_file = analysis_table(config, "node_damage", "dat_node_damage.csv")
+    outcome = outcome_column(config)
+    covariates = analysis_covariates(config, "niistat_covariates")
+    features = pd.read_csv(node_dir / feature_file)
+    phenotype = pd.read_csv(project_path(config, config["outputs"]["qc_dir"], "subject_manifest.csv"))
+    stats = fit_mass_univariate(features, phenotype, outcome, covariates)
     stats["roi"] = stats["feature"].str.replace("node_", "", regex=False).astype(int)
     return stats[["roi", "feature", "beta", "t", "p", "n", "q"]]
 
@@ -130,17 +133,20 @@ def postprocess_node(config: dict) -> None:
 def wm_beta_map(config: dict, mask: np.ndarray, ref_img: nib.Nifti1Image) -> np.ndarray:
     """Compute true DAT-WM voxelwise OLS beta map."""
     wm_dir = project_path(config, config["outputs"]["wm_voxel_dir"])
+    outcome = outcome_column(config)
+    covariates = analysis_covariates(config, "niistat_covariates")
     subjects = pd.read_csv(wm_dir / "dat_wm_voxel_niistat_subjects.csv")
     matrix = np.load(wm_dir / "dat_wm_voxel_matrix.npy", mmap_mode="r")
     if matrix.shape[0] != subjects.shape[0]:
         raise RuntimeError("DAT-WM matrix row count does not match subject table")
-    y = subjects["mrs_3m"].to_numpy(dtype=float)
-    covariates = subjects[["age", "sex", "nihss"]].to_numpy(dtype=float)
-    valid_rows = np.isfinite(y) & np.isfinite(covariates).all(axis=1)
+    require_columns([outcome, *covariates], list(subjects.columns), "DAT-WM NiiStat subjects")
+    y = subjects[outcome].to_numpy(dtype=float)
+    covariate_values = subjects[covariates].to_numpy(dtype=float) if covariates else np.empty((subjects.shape[0], 0))
+    valid_rows = np.isfinite(y) & np.isfinite(covariate_values).all(axis=1)
     flat_mask = mask.ravel()
     # 只在DAT-WM有效区域计算beta
     features = np.asarray(matrix[valid_rows][:, flat_mask], dtype=np.float64)
-    beta_values = beta_from_matrix(features, y[valid_rows], covariates[valid_rows])
+    beta_values = beta_from_matrix(features, y[valid_rows], covariate_values[valid_rows])
     beta_data = np.zeros(int(np.prod(ref_img.shape)), dtype=np.float32)
     beta_data[flat_mask] = np.nan_to_num(beta_values, nan=0.0).astype(np.float32)
     return beta_data.reshape(ref_img.shape)

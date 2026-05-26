@@ -1,6 +1,5 @@
 name,url,commit_or_version,test_status
 niistat,https://github.com/neurolabusc/NiiStat.git,79e8821480c6d0976bd7f8076f52b473a110b573,matlab_niistat_node_and_wm_completed
-nemo,https://github.com/kjamison/nemo.git,d5e20ca0f038d77abf5a30bf17e576bd3cbebce6,repo_cloned_nemo_database_blocked_by_missing_aws_credentials
 bctpy,https://github.com/aestrivex/bctpy.git,75823f140a11688fa37d4b69c4351b13bcbda24a,python_import_ok
 atlaspack,https://github.com/PennLINC/AtlasPack.git,2727a5fb14a42fb5995bdfc309112af5e4342cab,datalad_get_4s156_ok
 hansen_dat,https://github.com/netneurolab/hansen_receptors,data/PET_nifti_images/DAT_fpcit_hc174_dukart_spect.nii,nibabel_read_ok

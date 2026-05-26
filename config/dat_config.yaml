@@ -1,21 +1,42 @@
 project_dir: /home/zhenzong2/analysis/neurotransmitter
-
 inputs:
   lesion_glob: lesion/*.nii*
   phenotype_file: phenotype.xlsx
   phenotype_sheet: Sheet1
-  lesion_subject_regex: "sub-(TMS\\d{3})ses\\d+"
+  lesion_subject_regex: sub-(TMS\d{3})ses\d+
   phenotype_id_column: ID
   outcome_column: mRS_3m
   covariates:
     age: 年龄
     sex: 性别
     nihss: NIHSS
-
+  categorical_maps:
+    sex:
+      男: 1
+      女: 0
+      '1': 1
+      '0': 0
+analysis:
+  outcome: mrs_3m
+  niistat_covariates:
+  - age
+  - sex
+  - nihss
+  model_covariates:
+  - age
+  - sex
+  - nihss
+  - lesion_volume_ml
+  binary_outcome:
+    threshold: 2
+    positive_if_less_equal: true
+  tables:
+    node_damage: dat_node_damage.csv
+    lqt_edge_disconnection: lqt_edge_disconnection.csv
+    dat_edge_lqt: dat_edge_lqt.csv
 atlases:
   raw_dir: atlases/raw
   processed_dir: atlases/processed
-  nemo_dir: atlases/nemo
   lqt_dir: atlases/lqt
   atlas4s156:
     nii: atlases/raw/tpl-MNI152NLin6Asym_atlas-4S156Parcels_res-01_dseg.nii.gz
@@ -27,44 +48,28 @@ atlases:
     nii: atlases/raw/functionnectome_anat_DAT.nii.gz
   outputs:
     atlas4s156_2mm: atlases/processed/atlas4s156_2mm.nii.gz
-    atlas4s156_1mm_nemo: atlases/nemo/atlas4s156_1mm.nii.gz
     atlas4s156_1mm_lqt: atlases/lqt/atlas4s156_1mm.nii.gz
     dat_gray_2mm: atlases/processed/dat_gray_2mm.nii.gz
     dat_wm_2mm: atlases/processed/dat_wm_2mm.nii.gz
-    dat_wm_1mm_nemo: atlases/nemo/dat_wm_1mm.nii.gz
     dat_wm_mask_2mm: atlases/processed/dat_wm_mask_2mm.nii.gz
     atlas4s156_lqt_nodes: atlases/processed/atlas4s156_lqt_nodes.csv
-
-nemo:
-  data_dir: external/nemo_data
-  s3_root: s3://kuceyeski-wcm-nemodata/
-  request_payer: requester
-  algorithms:
-    - ifod2act
-    - sdstream
-  full_download: true
-  smoke_subject: TMS001
-  num_threads: 4
-
 lqt:
   repo_dir: external/lqt
   data_dir: external/lqt_data
   dsi_path: scripts/dsi_studio_docker.sh
+  docker_mount_root: /home/zhenzong2
   con_type: end
   file_suffix: atlas4s156
   max_subjects: null
-
 niistat:
   matlab_bin: matlab
   repo_dir: external/niistat
   num_permute: -1
   p_thresh: 0.05
   min_overlap: 3
-
 outputs:
   qc_dir: derivatives/qc
   node_dir: derivatives/node_clsm
   wm_voxel_dir: derivatives/wm_voxel_clsm
   edge_dir: derivatives/edge_clsm
   model_dir: derivatives/models
-  nemo_dir: derivatives/nemo

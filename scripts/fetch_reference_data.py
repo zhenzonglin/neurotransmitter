@@ -2,19 +2,15 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import sys
 import time
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-import numpy as np
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -158,174 +154,17 @@ def download_reference_maps(config: dict, force: bool = False) -> None:
     print(f"wrote {sources_path}")
 
 
-def make_s3_client():
-    """Create an S3 client."""
-    import boto3
-
-    return boto3.client("s3")
-
-
-def nemo_keys_for_algorithm(algorithm: str) -> dict[str, object]:
-    """Return NeMo S3 keys for one tracking algorithm."""
-    prefix = "" if algorithm == "ifod2act" else "nemo_sdstream_"
-    chunk_dir = "chunkfiles" if algorithm == "ifod2act" else "chunkfiles_sdstream"
-    return {
-        "algorithm": algorithm,
-        "chunk_dir": chunk_dir,
-        "metadata": [
-            f"{prefix}chunklist.npz" if algorithm != "ifod2act" else "nemo_chunklist.npz",
-            f"{prefix}endpoints.npy" if algorithm != "ifod2act" else "nemo_endpoints.npy",
-            f"{prefix}Asum_endpoints.npz" if algorithm != "ifod2act" else "nemo_Asum_endpoints.npz",
-            f"{prefix}Asum_weighted_endpoints.npz" if algorithm != "ifod2act" else "nemo_Asum_weighted_endpoints.npz",
-            f"{prefix}Asum_cumulative.npz" if algorithm != "ifod2act" else "nemo_Asum_cumulative.npz",
-            f"{prefix}Asum_weighted_cumulative.npz" if algorithm != "ifod2act" else "nemo_Asum_weighted_cumulative.npz",
-            f"{prefix}siftweights.npy" if algorithm != "ifod2act" else "nemo_siftweights.npy",
-            f"{prefix}tracklengths.npy" if algorithm != "ifod2act" else "nemo_tracklengths.npy",
-        ],
-    }
-
-
-def download_s3_key(
-    client,
-    bucket: str,
-    key: str,
-    output: Path,
-    request_payer: str | None = None,
-    retries: int = 3,
-) -> dict[str, object]:
-    """Download one S3 key with retries."""
-    output.parent.mkdir(parents=True, exist_ok=True)
-    if output.exists() and output.stat().st_size > 0:
-        return {"key": key, "local_path": str(output), "status": "exists", "size_bytes": output.stat().st_size}
-    last_error = ""
-    for _ in range(retries):
-        try:
-            tmp = output.with_suffix(output.suffix + ".part")
-            extra_args = {"RequestPayer": request_payer} if request_payer else None
-            if extra_args:
-                client.download_file(bucket, key, str(tmp), ExtraArgs=extra_args)
-            else:
-                client.download_file(bucket, key, str(tmp))
-            tmp.replace(output)
-            return {"key": key, "local_path": str(output), "status": "downloaded", "size_bytes": output.stat().st_size}
-        except Exception as error:  # noqa: BLE001
-            last_error = str(error)
-            time.sleep(5)
-    return {"key": key, "local_path": str(output), "status": "failed", "size_bytes": 0, "error": last_error}
-
-
-def append_manifest(path: Path, row: dict[str, object]) -> None:
-    """Append one download row."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    exists = path.exists()
-    fieldnames = ["algorithm", "key", "local_path", "status", "size_bytes", "error"]
-    with path.open("a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if not exists:
-            writer.writeheader()
-        writer.writerow({field: row.get(field, "") for field in fieldnames})
-
-
-def get_chunk_indices(chunklist_path: Path) -> list[int]:
-    """Read all chunk indices from a NeMo chunklist."""
-    data = np.load(chunklist_path, allow_pickle=True)
-    if "unique_chunks" in data:
-        return [int(x) for x in data["unique_chunks"]]
-    return list(range(len(data["chunkfilesize"])))
-
-
-def download_nemo_database(config: dict, algorithms: list[str], workers: int = 4) -> None:
-    """Download complete NeMo database for selected algorithms."""
-    data_dir = ensure_dir(project_path(config, config["nemo"]["data_dir"]))
-    manifest_path = data_dir / "download_manifest.csv"
-    summary_path = data_dir / "download_summary.json"
-    client = make_s3_client()
-    bucket = config["nemo"]["s3_root"].replace("s3://", "").strip("/").split("/")[0]
-    request_payer = config["nemo"].get("request_payer")
-    started = time.strftime("%Y-%m-%dT%H:%M:%S")
-    summary: dict[str, object] = {"started": started, "bucket": bucket, "algorithms": {}}
-
-    shared = download_s3_key(
-        client,
-        bucket,
-        "MNI152_T1_1mm_brain.nii.gz",
-        data_dir / "MNI152_T1_1mm_brain.nii.gz",
-        request_payer=request_payer,
-    )
-    shared["algorithm"] = "shared"
-    append_manifest(manifest_path, shared)
-    if shared["status"] == "failed":
-        summary["failed"] = True
-        summary["error"] = str(shared.get("error", "unknown error"))
-        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-        raise RuntimeError(
-            "failed to access NeMo requester-pays S3 bucket. "
-            "Configure AWS credentials with billing permission, then rerun the download."
-        )
-
-    for algorithm in algorithms:
-        info = nemo_keys_for_algorithm(algorithm)
-        algorithm_rows = []
-        print(f"downloading NeMo metadata: {algorithm}")
-        for key in info["metadata"]:
-            output = data_dir / key
-            row = download_s3_key(client, bucket, key, output, request_payer=request_payer)
-            row["algorithm"] = algorithm
-            append_manifest(manifest_path, row)
-            algorithm_rows.append(row)
-            if row["status"] == "failed":
-                raise RuntimeError(f"failed to download {key}: {row.get('error')}")
-
-        chunklist_key = "nemo_chunklist.npz" if algorithm == "ifod2act" else "nemo_sdstream_chunklist.npz"
-        chunk_indices = get_chunk_indices(data_dir / chunklist_key)
-        chunk_dir = str(info["chunk_dir"])
-        chunk_keys = [f"{chunk_dir}/chunk{idx:05d}.npz" for idx in chunk_indices]
-        print(f"downloading {len(chunk_keys)} NeMo chunks: {algorithm}")
-
-        ok_count = 0
-        failed_count = 0
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                pool.submit(download_s3_key, client, bucket, key, data_dir / key, request_payer): key
-                for key in chunk_keys
-            }
-            for index, future in enumerate(as_completed(futures), start=1):
-                row = future.result()
-                row["algorithm"] = algorithm
-                append_manifest(manifest_path, row)
-                ok_count += int(row["status"] in {"exists", "downloaded"})
-                failed_count += int(row["status"] == "failed")
-                if index % 100 == 0:
-                    print(f"{algorithm}: {index}/{len(chunk_keys)} chunks checked")
-        summary["algorithms"][algorithm] = {
-            "metadata_files": len(info["metadata"]),
-            "chunk_files": len(chunk_keys),
-            "chunk_ok": ok_count,
-            "chunk_failed": failed_count,
-        }
-        if failed_count:
-            raise RuntimeError(f"{algorithm} failed chunks: {failed_count}")
-
-    summary["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    print(f"wrote {summary_path}")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download DAT pilot reference data.")
     parser.add_argument("--config", default="config/dat_config.yaml")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--maps", action="store_true")
-    parser.add_argument("--nemo", action="store_true")
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--workers", type=int, default=4)
     args = parser.parse_args()
 
     config = load_config(args.config)
     if args.all or args.maps:
         download_reference_maps(config, force=args.force)
-    if args.all or args.nemo:
-        download_nemo_database(config, config["nemo"]["algorithms"], workers=args.workers)
 
 
 if __name__ == "__main__":

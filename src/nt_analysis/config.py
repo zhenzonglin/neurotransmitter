@@ -29,3 +29,26 @@ def ensure_dir(path: str | Path) -> Path:
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def outcome_column(config: dict[str, Any]) -> str:
+    """Return the internal outcome column name."""
+    return str(config.get("analysis", {}).get("outcome", "mrs_3m"))
+
+
+def analysis_covariates(config: dict[str, Any], key: str) -> list[str]:
+    """Return configured covariates for one analysis layer."""
+    values = config.get("analysis", {}).get(key, [])
+    return [str(value) for value in values]
+
+
+def analysis_table(config: dict[str, Any], key: str, default: str) -> str:
+    """Return a configured output table name."""
+    return str(config.get("analysis", {}).get("tables", {}).get(key, default))
+
+
+def require_columns(columns: list[str], available: list[str], context: str) -> None:
+    """Fail early when configured columns are missing."""
+    missing = [column for column in columns if column not in available]
+    if missing:
+        raise KeyError(f"missing columns in {context}: {missing}")

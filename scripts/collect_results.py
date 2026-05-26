@@ -13,7 +13,7 @@ from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from nt_analysis.config import ensure_dir, load_config, project_path
+from nt_analysis.config import analysis_covariates, analysis_table, ensure_dir, load_config, outcome_column, project_path, require_columns
 from nt_analysis.stats import fit_mass_univariate
 from nt_analysis.tables import write_csv
 
@@ -24,38 +24,14 @@ def load_phenotype(config: dict) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def run_edge_clsm(config: dict, algorithm: str) -> None:
-    """Run edge-wise mass-univariate CLSM on NeMo features."""
-    edge_dir = ensure_dir(project_path(config, config["outputs"]["edge_dir"]))
-    phenotype = load_phenotype(config).rename(columns={"mrs_3m": "outcome"})
-    features = pd.read_csv(edge_dir / f"dat_edge_chaco_{algorithm}_66.csv")
-    stats = fit_mass_univariate(features, phenotype, "outcome", ["age", "sex", "nihss", "lesion_volume_ml"])
-    write_csv(stats, edge_dir / f"dat_edge_clsm_stats_{algorithm}.csv")
-
-    # 保存矩阵形式结果
-    edge_count = features.shape[1] - 1
-    roi_count = int((1 + np.sqrt(1 + 8 * edge_count)) / 2)
-    beta = np.zeros((roi_count, roi_count), dtype=float)
-    pval = np.ones((roi_count, roi_count), dtype=float)
-    qval = np.ones((roi_count, roi_count), dtype=float)
-    for row in stats.itertuples(index=False):
-        _, left, right = row.feature.split("_")
-        i = int(left) - 1
-        j = int(right) - 1
-        beta[i, j] = row.beta
-        pval[i, j] = row.p
-        qval[i, j] = row.q
-    pd.DataFrame(beta).to_csv(edge_dir / f"dat_edge_beta_matrix_{algorithm}.csv", index=False)
-    pd.DataFrame(pval).to_csv(edge_dir / f"dat_edge_p_matrix_{algorithm}.csv", index=False)
-    pd.DataFrame(qval).to_csv(edge_dir / f"dat_edge_q_matrix_{algorithm}.csv", index=False)
-
-
 def run_lqt_edge_clsm(config: dict) -> None:
     """Run edge-wise CLSM on LQT DAT-weighted edge features."""
     edge_dir = ensure_dir(project_path(config, config["outputs"]["edge_dir"]))
-    phenotype = load_phenotype(config).rename(columns={"mrs_3m": "outcome"})
-    features = pd.read_csv(edge_dir / "dat_edge_lqt_66.csv")
-    stats = fit_mass_univariate(features, phenotype, "outcome", ["age", "sex", "nihss", "lesion_volume_ml"])
+    outcome = outcome_column(config)
+    covariates = analysis_covariates(config, "model_covariates")
+    phenotype = load_phenotype(config)
+    features = pd.read_csv(edge_dir / analysis_table(config, "dat_edge_lqt", "dat_edge_lqt.csv"))
+    stats = fit_mass_univariate(features, phenotype, outcome, covariates)
     write_csv(stats, edge_dir / "dat_edge_clsm_stats_lqt.csv")
 
     edge_count = features.shape[1] - 1
@@ -78,17 +54,26 @@ def run_lqt_edge_clsm(config: dict) -> None:
 def run_integrated_model(config: dict) -> None:
     """Run a compact elastic-net integrated model."""
     model_dir = ensure_dir(project_path(config, config["outputs"]["model_dir"]))
+    outcome = outcome_column(config)
+    covariates = analysis_covariates(config, "model_covariates")
+    binary = config.get("analysis", {}).get("binary_outcome", {})
+    threshold = float(binary.get("threshold", 2))
+    positive_if_less_equal = bool(binary.get("positive_if_less_equal", True))
     phenotype = load_phenotype(config)
-    node = pd.read_csv(project_path(config, config["outputs"]["node_dir"], "dat_node_damage_66x156.csv"))
-    edge_path = project_path(config, config["outputs"]["edge_dir"], "dat_edge_lqt_66.csv")
+    node = pd.read_csv(project_path(config, config["outputs"]["node_dir"], analysis_table(config, "node_damage", "dat_node_damage.csv")))
+    edge_path = project_path(config, config["outputs"]["edge_dir"], analysis_table(config, "dat_edge_lqt", "dat_edge_lqt.csv"))
     if not edge_path.exists():
         return
     edge = pd.read_csv(edge_path)
-    data = phenotype.merge(node, on="subject_id").merge(edge, on="subject_id").dropna(subset=["mrs_3m"])
-    data["mrs_binary"] = (data["mrs_3m"] <= 2).astype(int)
+    require_columns([outcome, *covariates], list(phenotype.columns), "phenotype")
+    data = phenotype.merge(node, on="subject_id").merge(edge, on="subject_id").dropna(subset=[outcome])
+    if positive_if_less_equal:
+        data["binary_outcome"] = (data[outcome] <= threshold).astype(int)
+    else:
+        data["binary_outcome"] = (data[outcome] >= threshold).astype(int)
     feature_cols = [c for c in data.columns if c.startswith("node_") or c.startswith("edge_")]
-    x = data[["age", "sex", "nihss", "lesion_volume_ml"] + feature_cols].fillna(0).to_numpy(dtype=float)
-    y = data["mrs_binary"].to_numpy(dtype=int)
+    x = data[covariates + feature_cols].fillna(0).to_numpy(dtype=float)
+    y = data["binary_outcome"].to_numpy(dtype=int)
     if len(np.unique(y)) < 2:
         return
     cv = StratifiedKFold(n_splits=min(5, np.bincount(y).min()), shuffle=True, random_state=42)
@@ -106,7 +91,7 @@ def run_integrated_model(config: dict) -> None:
     model.fit(x, y)
     perf = pd.DataFrame([{"model": "integrated_node_edge_lqt", "balanced_accuracy": balanced_accuracy_score(y, pred), "n": len(y)}])
     write_csv(perf, model_dir / "integrated_model_performance.csv")
-    coef = pd.DataFrame({"feature": ["age", "sex", "nihss", "lesion_volume_ml"] + feature_cols, "coef": model.coef_[0]})
+    coef = pd.DataFrame({"feature": covariates + feature_cols, "coef": model.coef_[0]})
     write_csv(coef[coef["feature"].str.startswith("node_") & (coef["coef"] != 0)], model_dir / "selected_nodes.csv")
     write_csv(coef[coef["feature"].str.startswith("edge_") & (coef["coef"] != 0)], model_dir / "selected_edges.csv")
     score = pd.DataFrame({"subject_id": data["subject_id"], "dat_integrated_score": model.decision_function(x)})
@@ -119,18 +104,16 @@ def main() -> None:
     args = parser.parse_args()
     config = load_config(args.config)
 
-    node = pd.read_csv(project_path(config, config["outputs"]["node_dir"], "dat_node_damage_66x156.csv"))
-    phenotype = load_phenotype(config).rename(columns={"mrs_3m": "outcome"})
-    node_stats = fit_mass_univariate(node, phenotype, "outcome", ["age", "sex", "nihss", "lesion_volume_ml"])
+    outcome = outcome_column(config)
+    covariates = analysis_covariates(config, "model_covariates")
+    node = pd.read_csv(project_path(config, config["outputs"]["node_dir"], analysis_table(config, "node_damage", "dat_node_damage.csv")))
+    phenotype = load_phenotype(config)
+    node_stats = fit_mass_univariate(node, phenotype, outcome, covariates)
     # Python模型只做探索性对照，主结果来自NiiStat
     write_csv(node_stats, project_path(config, config["outputs"]["node_dir"], "dat_node_python_ols_stats.csv"))
-    lqt_path = project_path(config, config["outputs"]["edge_dir"], "dat_edge_lqt_66.csv")
+    lqt_path = project_path(config, config["outputs"]["edge_dir"], analysis_table(config, "dat_edge_lqt", "dat_edge_lqt.csv"))
     if lqt_path.exists():
         run_lqt_edge_clsm(config)
-    for algorithm in ["ifod2act", "sdstream"]:
-        path = project_path(config, config["outputs"]["edge_dir"], f"dat_edge_chaco_{algorithm}_66.csv")
-        if path.exists():
-            run_edge_clsm(config, algorithm)
     run_integrated_model(config)
 
 

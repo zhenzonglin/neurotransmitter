@@ -2,7 +2,6 @@
 
 This guide describes how to manually QC the DAT NT-CLSM pilot outputs.
 The current main pipeline uses the original MNI152NLin6Asym 2mm lesion masks as patient image input.
-The `derivatives/nemo/` directory is legacy and should not be used for main QC.
 
 ## 1. Code Flow
 
@@ -32,11 +31,13 @@ cd /home/zhenzong2/analysis/neurotransmitter
 source /home/zhenzong/anaconda3/etc/profile.d/conda.sh
 conda activate NT_analysis
 
-python scripts/prepare_inputs.py --config config/dat_config.yaml
-bash scripts/run_niistat_node_wm.sh
-python scripts/postprocess_niistat.py --config config/dat_config.yaml
-Rscript scripts/run_lqt_edges.R --force
-python scripts/collect_results.py --config config/dat_config.yaml
+# First run notebooks/00_project_config.ipynb to write config/dat_config.yaml
+config_path=config/dat_config.yaml
+python scripts/prepare_inputs.py --config "${config_path}"
+bash scripts/run_niistat_node_wm.sh --config "${config_path}"
+python scripts/postprocess_niistat.py --config "${config_path}"
+Rscript scripts/run_lqt_edges.R --config "${config_path}" --force
+python scripts/collect_results.py --config "${config_path}"
 ```
 
 ## 2. First-Pass Table QC
@@ -51,8 +52,8 @@ derivatives/qc/phenotype_merge_qc.csv
 
 Expected:
 
-- `subject_manifest.csv` has 66 rows.
-- `lesion_qc.csv` has 66 rows.
+- `subject_manifest.csv` has one row per usable lesion mask.
+- `lesion_qc.csv` has the same row count as `subject_manifest.csv`.
 - `shape` should be `91x109x91`.
 - `voxel_volume_mm3` should be close to `8`.
 - `lesion_volume_ml` should not be zero.
@@ -67,7 +68,7 @@ root = "/home/zhenzong2/analysis/neurotransmitter"
 manifest = pd.read_csv(f"{root}/derivatives/qc/subject_manifest.csv")
 lesion = pd.read_csv(f"{root}/derivatives/qc/lesion_qc.csv")
 print("subjects:", len(manifest))
-print(manifest[["mrs_3m", "age", "sex", "nihss"]].notna().sum())
+print(manifest.filter(items=["mrs_3m", "age", "sex", "nihss"]).notna().sum())
 print(lesion["lesion_volume_ml"].describe())
 print(lesion.sort_values("lesion_volume_ml").head(5))
 print(lesion.sort_values("lesion_volume_ml", ascending=False).head(5))
@@ -165,7 +166,7 @@ Main files:
 
 ```text
 derivatives/node_clsm/dat_roi_156.csv
-derivatives/node_clsm/dat_node_damage_66x156.csv
+derivatives/node_clsm/dat_node_damage.csv
 derivatives/node_clsm/dat_node_clsm_stats.csv
 derivatives/node_clsm/dat_node_clsm_beta_stats.csv
 derivatives/node_clsm/dat_node_clsm_z_map.nii.gz
@@ -181,7 +182,7 @@ node_dat_damage[i,r] = lesion_fraction_in_roi[i,r] * dat_mean_in_roi[r]
 QC points:
 
 - `dat_roi_156.csv` has 156 rows.
-- `dat_node_damage_66x156.csv` has 66 rows and 157 columns including `subject_id`.
+- `dat_node_damage.csv` has one row per subject and 157 columns including `subject_id`.
 - Subjects with larger lesions should usually have more nonzero node features.
 - `z_map` and `beta_map` should not be identical.
 - `z_map` is the NiiStat standardized statistic.
@@ -197,7 +198,7 @@ import numpy as np
 import pandas as pd
 root = Path("/home/zhenzong2/analysis/neurotransmitter")
 roi = pd.read_csv(root / "derivatives/node_clsm/dat_roi_156.csv")
-damage = pd.read_csv(root / "derivatives/node_clsm/dat_node_damage_66x156.csv")
+damage = pd.read_csv(root / "derivatives/node_clsm/dat_node_damage.csv")
 stats = pd.read_csv(root / "derivatives/node_clsm/dat_node_clsm_stats.csv")
 z = np.asanyarray(nib.load(root / "derivatives/node_clsm/dat_node_clsm_z_map.nii.gz").dataobj)
 beta = np.asanyarray(nib.load(root / "derivatives/node_clsm/dat_node_clsm_beta_map.nii.gz").dataobj)
@@ -305,8 +306,8 @@ derivatives/edge_clsm/lqt_2mm/
 Main output files:
 
 ```text
-derivatives/edge_clsm/lqt_edge_disconnection_66.csv
-derivatives/edge_clsm/dat_edge_lqt_66.csv
+derivatives/edge_clsm/lqt_edge_disconnection.csv
+derivatives/edge_clsm/dat_edge_lqt.csv
 derivatives/edge_clsm/dat_edge_clsm_stats_lqt.csv
 derivatives/edge_clsm/dat_edge_beta_matrix_lqt.csv
 derivatives/edge_clsm/dat_edge_p_matrix_lqt.csv
@@ -369,7 +370,7 @@ PY
 
 QC points:
 
-- `dat_edge_lqt_66.csv` should have 66 rows and 12091 columns.
+- `dat_edge_lqt.csv` should have one row per subject and 12091 columns for 156 ROI nodes.
 - Many zeros are expected if lesions are small or do not intersect HCP842 streamlines.
 - A subject with nonzero `remaining_tracts` should usually have nonzero matrix cells.
 - If all subjects have zero `remaining_tracts`, check lesion space and DSI `.mni.` handling first.
@@ -388,7 +389,7 @@ derivatives/models/dat_integrated_score.csv
 Current pilot interpretation:
 
 - This is a smoke-test model.
-- With 66 cases and high-dimensional edge features, elastic-net convergence warnings can occur.
+- With small pilots and high-dimensional edge features, elastic-net convergence warnings can occur.
 - Do not treat this as a clinical prediction result.
 
 QC points:
@@ -402,22 +403,9 @@ QC points:
 1. Check `subject_manifest.csv`, `lesion_qc.csv`, and `phenotype_merge_qc.csv`.
 2. Open 10 representative lesions over MNI anatomy.
 3. Open `atlas4s156_2mm`, `dat_gray_2mm`, `dat_wm_2mm`, and `dat_wm_mask_2mm`.
-4. Check `dat_roi_156.csv` and `dat_node_damage_66x156.csv`.
+4. Check `dat_roi_156.csv` and `dat_node_damage.csv`.
 5. Open node `z_map` and `beta_map`; confirm they differ.
 6. Open WM `z/beta/p/q` maps; use `q_map` for corrected significance.
 7. Inspect LQT symlinks and DSI logs in `lqt_2mm`.
 8. Check edge table dimensions and log-derived `remaining_tracts`.
 9. Only after image and edge QC, inspect integrated model output.
-
-## 11. Files To Avoid For Main QC
-
-These are legacy or intermediate and should not drive main conclusions:
-
-```text
-derivatives/nemo/
-atlases/nemo/
-external/nemo_data/
-scripts/run_nemo_edges.py
-```
-
-They are retained for reproducibility and optional legacy NeMo work, not for the current 2mm lesion-only LQT main pipeline.
