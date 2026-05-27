@@ -40,6 +40,7 @@ python scripts/fetch_lqt_data.py --config "${config_path}"
 python scripts/prepare_inputs.py --config "${config_path}"
 bash scripts/run_niistat_node_wm.sh --config "${config_path}"
 Rscript scripts/run_lqt_edges.R --config "${config_path}"
+python scripts/compute_dat_impact_scores.py --config "${config_path}"
 python scripts/collect_results.py --config "${config_path}"
 ```
 
@@ -49,5 +50,15 @@ Change working path, input files, outcome, covariates, binary threshold, and
 analysis table names in `notebooks/00_project_config.ipynb`, then rerun its
 write-config cell. The scripts infer cohort size from
 `derivatives/qc/subject_manifest.csv`.
+
+`compute_dat_impact_scores.py` implements the SDC/FDC-style impact layer:
+10-fold discovery-validation, key lesion/DAT node-edge selection, patient-level
+impact scores, and six ordered mRS model comparisons:
+clinical-only, clinical + lesion impact, clinical + DAT node impact,
+clinical + DAT edge impact, clinical + DAT node + DAT edge impact, and
+clinical + lesion impact + DAT node + DAT edge impact. The primary prediction
+comparison uses 10-fold out-of-sample ordered mRS probabilities and bootstrap
+pairwise metric differences. In-sample likelihood comparisons are kept as
+auxiliary model-fit summaries.
 
 Large imaging data, LQT resources, and derivatives are excluded from git.

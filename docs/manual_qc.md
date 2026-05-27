@@ -37,6 +37,7 @@ python scripts/prepare_inputs.py --config "${config_path}"
 bash scripts/run_niistat_node_wm.sh --config "${config_path}"
 python scripts/postprocess_niistat.py --config "${config_path}"
 Rscript scripts/run_lqt_edges.R --config "${config_path}" --force
+python scripts/compute_dat_impact_scores.py --config "${config_path}"
 python scripts/collect_results.py --config "${config_path}"
 ```
 
@@ -377,6 +378,65 @@ QC points:
 
 ## 9. Integrated Model QC
 
+## 9. DAT Impact Score QC
+
+Main files:
+
+```text
+derivatives/impact/dat_impact_scores.csv
+derivatives/impact/lesion_impact_scores.csv
+derivatives/impact/dat_impact_fold_summary.csv
+derivatives/impact/key_lesion_nodes.csv
+derivatives/impact/key_lesion_edges.csv
+derivatives/impact/key_dat_nodes.csv
+derivatives/impact/key_dat_edges.csv
+derivatives/impact/dat_impact_ordinal_model.csv
+derivatives/impact/dat_impact_model_performance.csv
+derivatives/models/model_prediction_cv.csv
+derivatives/models/model_prediction_fold_status.csv
+derivatives/models/model_prediction_performance.csv
+derivatives/models/model_prediction_pairwise_bootstrap.csv
+derivatives/models/model_comparison_ordinal.csv
+derivatives/models/model_comparison_terms.csv
+derivatives/models/model_pairwise_comparison.csv
+```
+
+Interpretation:
+
+- 10-fold scoring uses the configured subject table as the active cohort.
+- `lesion_impact_scores.csv` contains lesion-only node, edge, and total impact scores.
+- `key_dat_nodes.csv` and `key_dat_edges.csv` are full-sample descriptive key features.
+- `dat_impact_scores.csv` contains out-of-fold node, edge, and total DAT impact scores.
+- `model_prediction_cv.csv` contains 10-fold out-of-sample mRS probabilities for every model.
+- `model_prediction_performance.csv` is the primary prediction performance table.
+- `model_prediction_pairwise_bootstrap.csv` contains bootstrap pairwise metric differences with FDR and Bonferroni correction.
+- `model_comparison_ordinal.csv` and `model_pairwise_comparison.csv` are auxiliary in-sample model-fit summaries.
+
+Useful command:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+import pandas as pd
+root = Path("/home/zhenzong2/analysis/neurotransmitter")
+impact = root / "derivatives/impact"
+scores = pd.read_csv(impact / "dat_impact_scores.csv")
+folds = pd.read_csv(impact / "dat_impact_fold_summary.csv")
+models = pd.read_csv(root / "derivatives/models/model_comparison_ordinal.csv")
+pred = pd.read_csv(root / "derivatives/models/model_prediction_performance.csv")
+pboot = pd.read_csv(root / "derivatives/models/model_prediction_pairwise_bootstrap.csv")
+print(scores.shape)
+print(scores[["lesion_total_impact", "dat_node_impact", "dat_edge_impact", "dat_total_impact"]].describe())
+print(folds[["fold", "n_train", "n_test", "selected_lesion_nodes", "selected_lesion_edges", "selected_dat_nodes", "selected_dat_edges"]])
+pairs = pd.read_csv(root / "derivatives/models/model_pairwise_comparison.csv")
+print(models[["model", "n", "aic", "delta_aic_vs_clinical", "lr_p_vs_clinical", "status"]])
+print(pred[["model", "ordinal_log_loss", "ranked_probability_score", "ordinal_c_index", "binary_auc_mrs_le_threshold"]])
+print(pboot[["model_a", "model_b", "metric", "delta_b_minus_a", "ci_low", "ci_high", "p_fdr_bh"]])
+PY
+```
+
+## 10. Integrated Model QC
+
 Main files:
 
 ```text
@@ -398,7 +458,7 @@ QC points:
 - Selected features may be empty in a small pilot.
 - If a smoke test with `--limit` was run, rerun full LQT before trusting the model.
 
-## 10. Recommended Manual QC Order
+## 11. Recommended Manual QC Order
 
 1. Check `subject_manifest.csv`, `lesion_qc.csv`, and `phenotype_merge_qc.csv`.
 2. Open 10 representative lesions over MNI anatomy.
@@ -408,4 +468,5 @@ QC points:
 6. Open WM `z/beta/p/q` maps; use `q_map` for corrected significance.
 7. Inspect LQT symlinks and DSI logs in `lqt_2mm`.
 8. Check edge table dimensions and log-derived `remaining_tracts`.
-9. Only after image and edge QC, inspect integrated model output.
+9. Check lesion/DAT impact score fold summary and ordinal model comparison output.
+10. Only after image and edge QC, inspect integrated model output.

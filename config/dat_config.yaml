@@ -34,6 +34,16 @@ analysis:
     node_damage: dat_node_damage.csv
     lqt_edge_disconnection: lqt_edge_disconnection.csv
     dat_edge_lqt: dat_edge_lqt.csv
+impact:
+  n_splits: 10
+  random_state: 42
+  dataset_name: main
+  weight_stat: t
+  q_threshold: 0.05
+  node_top_k: 20
+  edge_top_k: 200
+  use_q_if_available: true
+  prediction_bootstrap: 1000
 atlases:
   raw_dir: atlases/raw
   processed_dir: atlases/processed
@@ -73,3 +83,4 @@ outputs:
   wm_voxel_dir: derivatives/wm_voxel_clsm
   edge_dir: derivatives/edge_clsm
   model_dir: derivatives/models
+  impact_dir: derivatives/impact
