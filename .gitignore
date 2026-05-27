@@ -14,8 +14,6 @@ external/*
 !external/sources.lock
 external/lqt_data/
 external/r_libs/
-external/niistat/
-external/bctpy/
 external/lqt/
 derivatives/
 *.Zone.Identifier

@@ -18,10 +18,6 @@ inputs:
       '0': 0
 analysis:
   outcome: mrs_3m
-  niistat_covariates:
-  - age
-  - sex
-  - nihss
   model_covariates:
   - age
   - sex
@@ -31,9 +27,7 @@ analysis:
     threshold: 2
     positive_if_less_equal: true
   tables:
-    node_damage: dat_node_damage.csv
     lqt_edge_disconnection: lqt_edge_disconnection.csv
-    dat_edge_lqt: dat_edge_lqt.csv
 impact:
   n_splits: 10
   random_state: 42
@@ -44,6 +38,72 @@ impact:
   edge_top_k: 200
   use_q_if_available: true
   prediction_bootstrap: 1000
+neurotransmitters:
+- id: a4b2
+  label: alpha4beta2 nicotinic acetylcholine receptor
+  hansen_file: A4B2_flubatine_hc30_hillmer.nii.gz
+  alves_name: A4B2
+  neurovault_id: 802960
+- id: m1
+  label: muscarinic acetylcholine receptor M1
+  hansen_file: M1_lsn_hc24_naganawa.nii.gz
+  alves_name: M1
+  neurovault_id: 802964
+- id: vacht
+  label: vesicular acetylcholine transporter
+  hansen_file: VAChT_feobv_hc18_aghourian_sum.nii
+  alves_name: VAChT
+  neurovault_id: 802966
+- id: d1
+  label: dopamine receptor D1
+  hansen_file: D1_SCH23390_hc13_kaller.nii
+  alves_name: D1
+  neurovault_id: 802961
+- id: d2
+  label: dopamine receptor D2
+  hansen_file: D2_flb457_hc37_smith.nii.gz
+  alves_name: D2
+  neurovault_id: 802962
+- id: dat
+  label: dopamine transporter
+  hansen_file: DAT_fpcit_hc174_dukart_spect.nii
+  alves_name: DAT
+  neurovault_id: 802963
+- id: nat
+  label: noradrenaline transporter
+  hansen_file: NAT_MRB_hc77_ding.nii.gz
+  alves_name: NAT
+  neurovault_id: 802965
+- id: 5ht1a
+  label: serotonin receptor 5HT1a
+  hansen_file: 5HT1a_way_hc36_savli.nii
+  alves_name: 5HT1a
+  neurovault_id: 802954
+- id: 5ht1b
+  label: serotonin receptor 5HT1b
+  hansen_file: 5HT1b_p943_hc65_gallezot.nii.gz
+  alves_name: 5HT1b
+  neurovault_id: 802955
+- id: 5ht2a
+  label: serotonin receptor 5HT2a
+  hansen_file: 5HT2a_cimbi_hc29_beliveau.nii
+  alves_name: 5HT2a
+  neurovault_id: 802956
+- id: 5ht4
+  label: serotonin receptor 5HT4
+  hansen_file: 5HT4_sb20_hc59_beliveau.nii
+  alves_name: 5HT4
+  neurovault_id: 802957
+- id: 5ht6
+  label: serotonin receptor 5HT6
+  hansen_file: 5HT6_gsk_hc30_radhakrishnan.nii.gz
+  alves_name: 5HT6
+  neurovault_id: 802958
+- id: 5htt
+  label: serotonin transporter
+  hansen_file: 5HTT_dasb_hc100_beliveau.nii
+  alves_name: 5HTT
+  neurovault_id: 802959
 atlases:
   raw_dir: atlases/raw
   processed_dir: atlases/processed
@@ -52,16 +112,9 @@ atlases:
     nii: atlases/raw/tpl-MNI152NLin6Asym_atlas-4S156Parcels_res-01_dseg.nii.gz
     tsv: atlases/raw/atlas-4S156Parcels_dseg.tsv
     json: atlases/raw/tpl-MNI152NLin6Asym_atlas-4S156Parcels_dseg.json
-  hansen_dat:
-    nii: atlases/raw/DAT_fpcit_hc174_dukart_spect.nii
-  dat_wm:
-    nii: atlases/raw/functionnectome_anat_DAT.nii.gz
   outputs:
     atlas4s156_2mm: atlases/processed/atlas4s156_2mm.nii.gz
     atlas4s156_1mm_lqt: atlases/lqt/atlas4s156_1mm.nii.gz
-    dat_gray_2mm: atlases/processed/dat_gray_2mm.nii.gz
-    dat_wm_2mm: atlases/processed/dat_wm_2mm.nii.gz
-    dat_wm_mask_2mm: atlases/processed/dat_wm_mask_2mm.nii.gz
     atlas4s156_lqt_nodes: atlases/processed/atlas4s156_lqt_nodes.csv
 lqt:
   repo_dir: external/lqt
@@ -71,16 +124,9 @@ lqt:
   con_type: end
   file_suffix: atlas4s156
   max_subjects: null
-niistat:
-  matlab_bin: matlab
-  repo_dir: external/niistat
-  num_permute: -1
-  p_thresh: 0.05
-  min_overlap: 3
 outputs:
   qc_dir: derivatives/qc
-  node_dir: derivatives/node_clsm
-  wm_voxel_dir: derivatives/wm_voxel_clsm
-  edge_dir: derivatives/edge_clsm
-  model_dir: derivatives/models
-  impact_dir: derivatives/impact
+  node_dir: derivatives/shared
+  edge_dir: derivatives/shared
+  model_dir: derivatives/nt/summary
+  impact_dir: derivatives/nt/summary

@@ -1,9 +1,7 @@
 name,url,commit_or_version,test_status
-niistat,https://github.com/neurolabusc/NiiStat.git,79e8821480c6d0976bd7f8076f52b473a110b573,matlab_niistat_node_and_wm_completed
-bctpy,https://github.com/aestrivex/bctpy.git,75823f140a11688fa37d4b69c4351b13bcbda24a,python_import_ok
 atlaspack,https://github.com/PennLINC/AtlasPack.git,2727a5fb14a42fb5995bdfc309112af5e4342cab,datalad_get_4s156_ok
-hansen_dat,https://github.com/netneurolab/hansen_receptors,data/PET_nifti_images/DAT_fpcit_hc174_dukart_spect.nii,nibabel_read_ok
-functionnectome_dat_wm,https://neurovault.org/api/images/802963/,functionnectome_anat_DAT.nii.gz,nibabel_read_ok
-lqt,https://github.com/jdwor/LQT.git,ab5801bd5ef2d5a9c3c6d75c332d0ef2fa6968b8,repo_cloned_lqt_data_downloaded_66_subjects_completed
-dsi_studio_docker,https://hub.docker.com/r/dsistudio/dsistudio,latest,version_ok_lqt_edge_completed
+hansen_receptors,https://github.com/netneurolab/hansen_receptors,data/PET_nifti_images_configured_neurotransmitters,nibabel_read_ok
+alves_functionnectome,https://neurovault.org/collections/15237/,configured_functionnectome_anat_maps,nibabel_read_ok
+lqt,https://github.com/jdwor/LQT.git,ab5801bd5ef2d5a9c3c6d75c332d0ef2fa6968b8,repo_cloned_lqt_data_downloaded
+dsi_studio_docker,https://hub.docker.com/r/dsistudio/dsistudio,latest,lqt_edge_completed
 lqt_figshare_resources,https://figshare.com/articles/dataset/Lesion_Quantification_Toolkit_Templates/13344410,see_external_lqt_data_download_summary,download_ok

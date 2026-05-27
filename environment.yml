@@ -14,8 +14,6 @@ dependencies:
   - openpyxl
   - pyyaml
   - requests
-  - boto3
-  - botocore
   - datalad
   - matplotlib
   - seaborn

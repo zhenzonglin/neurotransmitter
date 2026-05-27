@@ -51,9 +51,6 @@ dir.create(atlas_dir, recursive = TRUE, showWarnings = FALSE)
 
 nodes <- read.csv(file.path(project_dir, config$atlases$outputs$atlas4s156_lqt_nodes))
 manifest <- read.csv(file.path(project_dir, config$outputs$qc_dir, "subject_manifest.csv"))
-dat_roi <- read.csv(file.path(project_dir, config$outputs$node_dir, "dat_roi_156.csv"))
-dat_roi <- dat_roi[match(nodes$roi, dat_roi$roi), ]
-dat_weight <- outer(dat_roi$dat_mean, dat_roi$dat_mean)
 roi_count <- nrow(nodes)
 
 if (!is.na(limit)) {
@@ -161,7 +158,6 @@ for (i in seq_len(roi_count - 1)) {
 }
 
 raw_rows <- list()
-dat_rows <- list()
 for (row_index in seq_len(nrow(manifest))) {
   subject_id <- manifest$subject_id[row_index]
   lesion_path <- manifest$lesion_path[row_index]
@@ -188,29 +184,21 @@ for (row_index in seq_len(nrow(manifest))) {
   } else {
     sdc <- as.matrix(read.csv(out_matrix))
   }
-  dat_edge <- sdc * dat_weight
-
   raw_values <- c(subject_id = subject_id)
-  dat_values <- c(subject_id = subject_id)
   edge_index <- 1
   for (i in seq_len(roi_count - 1)) {
     for (j in (i + 1):roi_count) {
       raw_values[edge_names[edge_index]] <- sdc[i, j]
-      dat_values[edge_names[edge_index]] <- dat_edge[i, j]
       edge_index <- edge_index + 1
     }
   }
   raw_rows[[row_index]] <- raw_values
-  dat_rows[[row_index]] <- dat_values
   cat(sprintf("finished %s (%d/%d)\n", subject_id, row_index, nrow(manifest)))
 }
 
 raw_df <- as.data.frame(do.call(rbind, raw_rows), stringsAsFactors = FALSE)
-dat_df <- as.data.frame(do.call(rbind, dat_rows), stringsAsFactors = FALSE)
 for (col in edge_names) {
   raw_df[[col]] <- as.numeric(raw_df[[col]])
-  dat_df[[col]] <- as.numeric(dat_df[[col]])
 }
 write.csv(raw_df, file.path(edge_dir, config$analysis$tables$lqt_edge_disconnection), row.names = FALSE)
-write.csv(dat_df, file.path(edge_dir, config$analysis$tables$dat_edge_lqt), row.names = FALSE)
-cat("wrote LQT edge tables\n")
+cat("wrote LQT edge disconnection table\n")

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
 
@@ -16,24 +15,8 @@ from statsmodels.stats.multitest import multipletests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from nt_analysis.config import analysis_covariates, analysis_table, ensure_dir, load_config, outcome_column, project_path, require_columns
+from nt_analysis.config import analysis_covariates, analysis_table, ensure_dir, outcome_column, project_path, require_columns
 from nt_analysis.tables import write_csv
-
-
-def load_phenotype(config: dict) -> pd.DataFrame:
-    """Load prepared subject table."""
-    path = project_path(config, config["outputs"]["qc_dir"], "subject_manifest.csv")
-    return pd.read_csv(path)
-
-
-def load_feature_tables(config: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Load phenotype, node and edge feature tables."""
-    phenotype = load_phenotype(config)
-    node_path = project_path(config, config["outputs"]["node_dir"], analysis_table(config, "node_damage", "dat_node_damage.csv"))
-    edge_path = project_path(config, config["outputs"]["edge_dir"], analysis_table(config, "dat_edge_lqt", "dat_edge_lqt.csv"))
-    node = pd.read_csv(node_path)
-    edge = pd.read_csv(edge_path)
-    return phenotype, node, edge
 
 
 def compute_lesion_node_load(config: dict, phenotype: pd.DataFrame) -> pd.DataFrame:
@@ -67,19 +50,6 @@ def load_lesion_feature_tables(config: dict, phenotype: pd.DataFrame) -> tuple[p
     edge_path = project_path(config, config["outputs"]["edge_dir"], analysis_table(config, "lqt_edge_disconnection", "lqt_edge_disconnection.csv"))
     lesion_edge = pd.read_csv(edge_path)
     return lesion_node, lesion_edge
-
-
-def load_analysis_tables(config: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Path, str]:
-    """Load main analysis tables."""
-    impact_dir = ensure_dir(project_path(config, config["outputs"]["impact_dir"]))
-    phenotype, node, edge = load_feature_tables(config)
-    if "base_subject_id" not in phenotype.columns:
-        phenotype["base_subject_id"] = phenotype["subject_id"]
-    if "repeat_id" not in phenotype.columns:
-        phenotype["repeat_id"] = 1
-    lesion_node, lesion_edge = load_lesion_feature_tables(config, phenotype)
-    dataset_name = str(config.get("impact", {}).get("dataset_name", "main"))
-    return phenotype, node, edge, lesion_node, lesion_edge, impact_dir, dataset_name
 
 
 def residualize(values: np.ndarray, design: np.ndarray) -> np.ndarray:
@@ -212,8 +182,8 @@ def run_cross_validated_impact(
     scores["fold"] = np.nan
     scores["lesion_node_impact"] = np.nan
     scores["lesion_edge_impact"] = np.nan
-    scores["dat_node_impact"] = np.nan
-    scores["dat_edge_impact"] = np.nan
+    scores["nt_node_impact"] = np.nan
+    scores["nt_edge_impact"] = np.nan
     fold_rows = []
     gkf = GroupKFold(n_splits=n_splits)
 
@@ -249,12 +219,12 @@ def run_cross_validated_impact(
                 "fold": fold_id,
                 "lesion_node_impact": lesion_node_impact.to_numpy(),
                 "lesion_edge_impact": lesion_edge_impact.to_numpy(),
-                "dat_node_impact": node_impact.to_numpy(),
-                "dat_edge_impact": edge_impact.to_numpy(),
+                "nt_node_impact": node_impact.to_numpy(),
+                "nt_edge_impact": edge_impact.to_numpy(),
             }
         )
         scores = scores.merge(test_frame, on="subject_id", how="left", suffixes=("", "_new"))
-        for col in ["fold", "lesion_node_impact", "lesion_edge_impact", "dat_node_impact", "dat_edge_impact"]:
+        for col in ["fold", "lesion_node_impact", "lesion_edge_impact", "nt_node_impact", "nt_edge_impact"]:
             scores[col] = scores[f"{col}_new"].combine_first(scores[col])
             scores = scores.drop(columns=[f"{col}_new"])
 
@@ -268,19 +238,19 @@ def run_cross_validated_impact(
                 "n_test_groups": len(set(merged_ids.iloc[test_idx]["base_subject_id"])),
                 "selected_lesion_nodes": int((lesion_node_weights["weight"] != 0).sum()),
                 "selected_lesion_edges": int((lesion_edge_weights["weight"] != 0).sum()),
-                "selected_dat_nodes": int((node_weights["weight"] != 0).sum()),
-                "selected_dat_edges": int((edge_weights["weight"] != 0).sum()),
+                "selected_nt_nodes": int((node_weights["weight"] != 0).sum()),
+                "selected_nt_edges": int((edge_weights["weight"] != 0).sum()),
                 "selected_nodes": int((node_weights["weight"] != 0).sum()),
                 "selected_edges": int((edge_weights["weight"] != 0).sum()),
             }
         )
 
     scores["lesion_total_impact"] = zscore(scores["lesion_node_impact"]) + zscore(scores["lesion_edge_impact"])
-    scores["dat_total_impact"] = zscore(scores["dat_node_impact"]) + zscore(scores["dat_edge_impact"])
+    scores["nt_total_impact"] = zscore(scores["nt_node_impact"]) + zscore(scores["nt_edge_impact"])
     scores["dataset"] = dataset_name
-    write_csv(scores, out_dir / "dat_impact_scores.csv")
+    write_csv(scores, out_dir / "nt_impact_scores.csv")
     write_csv(scores[["subject_id", "fold", "lesion_node_impact", "lesion_edge_impact", "lesion_total_impact", "dataset"]], out_dir / "lesion_impact_scores.csv")
-    write_csv(pd.DataFrame(fold_rows), out_dir / "dat_impact_fold_summary.csv")
+    write_csv(pd.DataFrame(fold_rows), out_dir / "nt_impact_fold_summary.csv")
     return scores
 
 
@@ -315,8 +285,8 @@ def write_full_sample_keys(
     edge_weights["dataset"] = dataset_name
     write_csv(lesion_node_weights.sort_values("weight", key=lambda x: x.abs(), ascending=False), out_dir / "key_lesion_nodes.csv")
     write_csv(lesion_edge_weights.sort_values("weight", key=lambda x: x.abs(), ascending=False), out_dir / "key_lesion_edges.csv")
-    write_csv(node_weights.sort_values("weight", key=lambda x: x.abs(), ascending=False), out_dir / "key_dat_nodes.csv")
-    write_csv(edge_weights.sort_values("weight", key=lambda x: x.abs(), ascending=False), out_dir / "key_dat_edges.csv")
+    write_csv(node_weights.sort_values("weight", key=lambda x: x.abs(), ascending=False), out_dir / "key_nt_nodes.csv")
+    write_csv(edge_weights.sort_values("weight", key=lambda x: x.abs(), ascending=False), out_dir / "key_nt_edges.csv")
 
 
 def fit_ordered_model(data: pd.DataFrame, outcome: str, predictors: list[str]) -> tuple[object | None, str, str]:
@@ -334,12 +304,12 @@ def model_specs(covariates: list[str]) -> list[tuple[str, list[str]]]:
     return [
         ("clinical_only", covariates),
         ("clinical_lesion_impact", covariates + ["lesion_total_impact"]),
-        ("clinical_dat_node_impact", covariates + ["dat_node_impact"]),
-        ("clinical_dat_edge_impact", covariates + ["dat_edge_impact"]),
-        ("clinical_dat_node_edge_impact", covariates + ["dat_node_impact", "dat_edge_impact"]),
+        ("clinical_nt_node_impact", covariates + ["nt_node_impact"]),
+        ("clinical_nt_edge_impact", covariates + ["nt_edge_impact"]),
+        ("clinical_nt_node_edge_impact", covariates + ["nt_node_impact", "nt_edge_impact"]),
         (
-            "clinical_lesion_dat_node_edge_impact",
-            covariates + ["lesion_total_impact", "dat_node_impact", "dat_edge_impact"],
+            "clinical_lesion_nt_node_edge_impact",
+            covariates + ["lesion_total_impact", "nt_node_impact", "nt_edge_impact"],
         ),
     ]
 
@@ -362,13 +332,45 @@ def align_probabilities(fit: object, probabilities: np.ndarray, labels: list[int
 
 def ordinal_c_index(observed: np.ndarray, expected: np.ndarray) -> float:
     """Compute a simple concordance index for ordered outcomes."""
-    y_diff = observed[:, None] - observed[None, :]
-    s_diff = expected[:, None] - expected[None, :]
-    mask = np.triu(np.ones_like(y_diff, dtype=bool), k=1) & (y_diff != 0)
-    if not np.any(mask):
+    observed = np.asarray(observed, dtype=int)
+    expected = np.asarray(expected, dtype=float)
+    valid = np.isfinite(observed) & np.isfinite(expected)
+    observed = observed[valid]
+    expected = expected[valid]
+    if observed.size < 2:
         return np.nan
-    concordance = y_diff[mask] * s_diff[mask]
-    return float((np.sum(concordance > 0) + 0.5 * np.sum(concordance == 0)) / np.sum(mask))
+    levels = sorted(np.unique(observed))
+    level_index = {level: index for index, level in enumerate(levels)}
+    order = np.argsort(expected, kind="mergesort")
+    y = observed[order]
+    score = expected[order]
+    previous = np.zeros(len(levels), dtype=float)
+    concordant = 0.0
+    comparable = 0.0
+    start = 0
+    while start < len(y):
+        stop = start + 1
+        while stop < len(y) and score[stop] == score[start]:
+            stop += 1
+        group = y[start:stop]
+        group_counts = np.zeros(len(levels), dtype=float)
+        for value in group:
+            idx = level_index[int(value)]
+            # 更高预测分对应更差预后
+            concordant += previous[:idx].sum()
+            comparable += previous.sum() - previous[idx]
+            group_counts[idx] += 1
+        group_comparable = 0.0
+        for left in range(len(levels)):
+            for right in range(left + 1, len(levels)):
+                group_comparable += group_counts[left] * group_counts[right]
+        concordant += 0.5 * group_comparable
+        comparable += group_comparable
+        previous += group_counts
+        start = stop
+    if comparable <= 0:
+        return np.nan
+    return float(concordant / comparable)
 
 
 def prediction_metrics(df: pd.DataFrame, labels: list[int], threshold: float) -> dict[str, float]:
@@ -770,9 +772,9 @@ def fit_ordinal_impact_model(config: dict, scores: pd.DataFrame, impact_dir: Pat
     write_csv(pd.DataFrame(term_rows), model_dir / "model_comparison_terms.csv")
     write_pairwise_model_comparison(specs, fits, int(data.shape[0]), model_dir)
 
-    dat_model = comparison[comparison["model"] == "clinical_dat_node_edge_impact"].copy()
-    if base is not None and not dat_model.empty:
-        dat_model = dat_model.rename(
+    nt_model = comparison[comparison["model"] == "clinical_nt_node_edge_impact"].copy()
+    if base is not None and not nt_model.empty:
+        nt_model = nt_model.rename(
             columns={
                 "aic": "full_aic",
                 "llf": "full_llf",
@@ -781,26 +783,10 @@ def fit_ordinal_impact_model(config: dict, scores: pd.DataFrame, impact_dir: Pat
                 "lr_p_vs_clinical": "lr_p",
             }
         )
-        dat_model["base_aic"] = float(base.aic)
-        dat_model["base_llf"] = float(base.llf)
-        dat_model["model"] = "ordinal_mrs_dat_impact"
-        write_csv(dat_model[["model", "n", "base_aic", "full_aic", "base_llf", "full_llf", "lr_stat", "lr_df", "lr_p", "status"]], impact_dir / "dat_impact_model_performance.csv")
+        nt_model["base_aic"] = float(base.aic)
+        nt_model["base_llf"] = float(base.llf)
+        nt_model["model"] = "ordinal_mrs_nt_impact"
+        write_csv(nt_model[["model", "n", "base_aic", "full_aic", "base_llf", "full_llf", "lr_stat", "lr_df", "lr_p", "status"]], impact_dir / "nt_impact_model_performance.csv")
     terms = pd.DataFrame(term_rows)
-    write_csv(terms[terms["model"] == "clinical_dat_node_edge_impact"], impact_dir / "dat_impact_ordinal_model.csv")
+    write_csv(terms[terms["model"] == "clinical_nt_node_edge_impact"], impact_dir / "nt_impact_ordinal_model.csv")
 
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Compute cross-validated DAT impact scores.")
-    parser.add_argument("--config", default="config/dat_config.yaml")
-    args = parser.parse_args()
-
-    config = load_config(args.config)
-    phenotype, node, edge, lesion_node, lesion_edge, out_dir, dataset_name = load_analysis_tables(config)
-    scores = run_cross_validated_impact(config, phenotype, node, edge, lesion_node, lesion_edge, out_dir, dataset_name)
-    write_full_sample_keys(config, phenotype, node, edge, lesion_node, lesion_edge, out_dir, dataset_name)
-    fit_ordinal_impact_model(config, scores, out_dir)
-    run_cross_validated_prediction(config, scores, ensure_dir(project_path(config, config["outputs"]["model_dir"])))
-
-
-if __name__ == "__main__":
-    main()

@@ -25,12 +25,8 @@ ATLASPACK_URLS = {
     "json": "tpl-MNI152NLin6Asym_atlas-4S156Parcels_dseg.json",
 }
 
-HANSEN_DAT_URL = (
-    "https://raw.githubusercontent.com/netneurolab/hansen_receptors/main/"
-    "data/PET_nifti_images/DAT_fpcit_hc174_dukart_spect.nii"
-)
-
-NEUROVAULT_DAT_API = "https://neurovault.org/api/images/802963/"
+HANSEN_BASE_URL = "https://raw.githubusercontent.com/netneurolab/hansen_receptors/main/data/PET_nifti_images"
+NEUROVAULT_IMAGE_API = "https://neurovault.org/api/images/{image_id}/"
 
 
 def sha256_file(path: Path) -> str:
@@ -84,11 +80,30 @@ def download_atlaspack(config: dict, force: bool = False) -> list[dict[str, obje
     """Download AtlasPack files through DataLad/OSF."""
     raw_dir = ensure_dir(project_path(config, config["atlases"]["raw_dir"]))
     repo_dir = raw_dir / "atlaspack_datalad"
+    keys = ["nii", "tsv", "json"]
+    outputs = {
+        "nii": project_path(config, config["atlases"]["atlas4s156"]["nii"]),
+        "tsv": project_path(config, config["atlases"]["atlas4s156"]["tsv"]),
+        "json": project_path(config, config["atlases"]["atlas4s156"]["json"]),
+    }
+    if not force and all(path.exists() and path.stat().st_size > 0 for path in outputs.values()):
+        return [
+            {
+                "name": f"atlas4s156_{key}",
+                "url": f"{ATLASPACK_URLS['repo']}::{ATLASPACK_URLS[key]}",
+                "path": str(path),
+                "status": "exists",
+                "size_bytes": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+            for key, path in outputs.items()
+        ]
+
     datalad_bin = shutil.which("datalad")
     if datalad_bin is None:
         raise RuntimeError("datalad is required to download AtlasPack annex content")
 
-    atlas_target = project_path(config, config["atlases"]["atlas4s156"]["nii"])
+    atlas_target = outputs["nii"]
     if force and atlas_target.exists():
         atlas_target.unlink()
 
@@ -96,15 +111,9 @@ def download_atlaspack(config: dict, force: bool = False) -> list[dict[str, obje
         # AtlasPack的NIfTI是git-annex内容，必须用DataLad获取实体文件
         run_command([datalad_bin, "clone", ATLASPACK_URLS["repo"], str(repo_dir)])
 
-    keys = ["nii", "tsv", "json"]
     paths = [ATLASPACK_URLS[key] for key in keys]
     run_command([datalad_bin, "get", *paths], cwd=repo_dir)
 
-    outputs = {
-        "nii": project_path(config, config["atlases"]["atlas4s156"]["nii"]),
-        "tsv": project_path(config, config["atlases"]["atlas4s156"]["tsv"]),
-        "json": project_path(config, config["atlases"]["atlas4s156"]["json"]),
-    }
     sources = []
     for key in keys:
         src = repo_dir / ATLASPACK_URLS[key]
@@ -128,27 +137,78 @@ def download_atlaspack(config: dict, force: bool = False) -> list[dict[str, obje
 
 def get_neurovault_file_url(api_url: str) -> str:
     """Read the DAT-WM download URL from NeuroVault metadata."""
-    request = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(request, timeout=120) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    last_error = ""
+    data = None
+    for _ in range(5):
+        try:
+            response = requests.get(api_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=120)
+            response.raise_for_status()
+            data = response.json()
+            break
+        except Exception as error:  # noqa: BLE001
+            last_error = str(error)
+            time.sleep(5)
+    if data is None:
+        try:
+            request = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(request, timeout=120) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except Exception as error:  # noqa: BLE001
+            raise RuntimeError(f"failed to read NeuroVault metadata {api_url}: {last_error}; {error}") from error
     return data["file"].replace("http://", "https://")
 
 
+def neurotransmitter_specs(config: dict) -> list[dict[str, object]]:
+    """Return configured neurotransmitter maps."""
+    specs = config.get("neurotransmitters", [])
+    if not specs:
+        specs = [
+            {
+                "id": "dat",
+                "label": "dopamine transporter",
+                "hansen_file": "DAT_fpcit_hc174_dukart_spect.nii",
+                "alves_name": "DAT",
+                "neurovault_id": 802963,
+            }
+        ]
+    return specs
+
+
+def download_neurotransmitter_maps(config: dict, force: bool = False) -> list[dict[str, object]]:
+    """Download Hansen and Alves maps for all configured neurotransmitters."""
+    raw_dir = ensure_dir(project_path(config, config["atlases"]["raw_dir"]))
+    hansen_dir = ensure_dir(raw_dir / "hansen")
+    alves_dir = ensure_dir(raw_dir / "alves")
+    sources = []
+    for spec in neurotransmitter_specs(config):
+        nt_id = str(spec["id"])
+        hansen_file = str(spec["hansen_file"])
+        alves_name = str(spec["alves_name"])
+        neurovault_id = int(spec["neurovault_id"])
+        hansen_url = f"{HANSEN_BASE_URL}/{hansen_file}"
+        hansen_output = hansen_dir / hansen_file
+        if force and hansen_output.exists():
+            hansen_output.unlink()
+        result = download_url(hansen_url, hansen_output)
+        result.update({"name": f"{nt_id}_hansen", "url": hansen_url, "nt_id": nt_id, "source": "hansen"})
+        sources.append(result)
+
+        api_url = NEUROVAULT_IMAGE_API.format(image_id=neurovault_id)
+        alves_url = get_neurovault_file_url(api_url)
+        alves_output = alves_dir / f"functionnectome_anat_{alves_name}.nii.gz"
+        if force and alves_output.exists():
+            alves_output.unlink()
+        result = download_url(alves_url, alves_output)
+        result.update({"name": f"{nt_id}_alves", "url": alves_url, "nt_id": nt_id, "source": "alves"})
+        sources.append(result)
+    return sources
+
+
 def download_reference_maps(config: dict, force: bool = False) -> None:
-    """Download AtlasPack, Hansen DAT and Functionnectome DAT-WM."""
+    """Download AtlasPack and configured neurotransmitter maps."""
     raw_dir = ensure_dir(project_path(config, config["atlases"]["raw_dir"]))
     sources = download_atlaspack(config, force=force)
-    targets = [
-        ("hansen_dat", HANSEN_DAT_URL, project_path(config, config["atlases"]["hansen_dat"]["nii"])),
-    ]
-    dat_wm_url = get_neurovault_file_url(NEUROVAULT_DAT_API)
-    targets.append(("functionnectome_dat_wm", dat_wm_url, project_path(config, config["atlases"]["dat_wm"]["nii"])))
-    for name, url, output in targets:
-        if force and output.exists():
-            output.unlink()
-        result = download_url(url, output)
-        result.update({"name": name, "url": url})
-        sources.append(result)
+    sources.extend(download_neurotransmitter_maps(config, force=force))
     sources_path = raw_dir / "sources.json"
     sources_path.write_text(json.dumps(sources, indent=2), encoding="utf-8")
     print(f"wrote {sources_path}")
