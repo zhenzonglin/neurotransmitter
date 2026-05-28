@@ -3,8 +3,8 @@
 This repository runs neurotransmitter-focused NT-CLSM pilots for acute ischemic stroke.
 The workflow is lesion-first: MNI 2mm lesion masks are mapped to 4S156 nodes,
 LQT-R/DSI Studio estimates lesion-only structural disconnection edges, and
-Hansen plus Alves/Functionnectome neurotransmitter maps weight the node, edge,
-and white-matter damage summaries.
+Hansen plus Alves/Functionnectome neurotransmitter maps weight node and edge
+damage features.
 
 ## WSL entrypoint
 
@@ -39,6 +39,7 @@ python scripts/fetch_reference_data.py --config "${config_path}" --maps
 python scripts/fetch_lqt_data.py --config "${config_path}"
 python scripts/prepare_inputs.py --config "${config_path}"
 Rscript scripts/run_lqt_edges.R --config "${config_path}"
+python scripts/build_edge_tract_matrix.py --config "${config_path}"
 python scripts/run_multi_nt_analysis.py --config "${config_path}"
 ```
 
@@ -65,14 +66,24 @@ Each receptor/transporter folder contains:
 ```text
 atlases/<nt_id>_hansen_gray_2mm.nii.gz
 atlases/<nt_id>_alves_wm_2mm.nii.gz
-atlases/<nt_id>_alves_wm_mask_2mm.nii.gz
 node/nt_roi_156.csv
 node/nt_node_damage.csv
 edge/nt_edge_lqt.csv
-wm/nt_wm_damage.csv
 impact/nt_impact_scores.csv
 models/model_prediction_performance.csv
 models/model_prediction_pairwise_bootstrap.csv
+```
+
+`edge/nt_edge_lqt.csv` is computed as:
+
+```text
+edge_nt_damage[i,e] = sum_v lesion_i(v) * edge_tract_mask_e(v) * Alves_NT_WM(v)
+```
+
+The shared tract mask matrix is stored at:
+
+```text
+derivatives/shared/edge_tract_voxels_2mm.npz
 ```
 
 `scripts/compute_impact_scores.py` contains the reusable impact-score and

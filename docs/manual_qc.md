@@ -15,6 +15,7 @@ python scripts/fetch_lqt_data.py --config "${config_path}"
 python scripts/prepare_inputs.py --config "${config_path}"
 Rscript scripts/install_lqt_r_deps.R --project-dir /home/zhenzong2/analysis/neurotransmitter
 Rscript scripts/run_lqt_edges.R --config "${config_path}"
+python scripts/build_edge_tract_matrix.py --config "${config_path}"
 python scripts/run_multi_nt_analysis.py --config "${config_path}"
 ```
 
@@ -27,8 +28,11 @@ flowchart TD
     B --> D["atlas4s156_2mm + atlas4s156_1mm_lqt"]
     D --> E["run_lqt_edges.R"]
     E --> F["derivatives/shared/lqt_edge_disconnection.csv"]
+    E --> K["build_edge_tract_matrix.py"]
+    K --> L["derivatives/shared/edge_tract_voxels_2mm.npz"]
     C --> G["run_multi_nt_analysis.py"]
     F --> G
+    L --> G
     H["Hansen + Alves maps"] --> G
     G --> I["derivatives/nt/<nt_id>"]
     G --> J["derivatives/nt/summary"]
@@ -87,6 +91,8 @@ Main file:
 
 ```text
 derivatives/shared/lqt_edge_disconnection.csv
+derivatives/shared/edge_tract_voxels_2mm.npz
+derivatives/shared/edge_tract_voxels_2mm_qc.csv
 ```
 
 Expected:
@@ -94,6 +100,7 @@ Expected:
 - One row per active subject.
 - 12090 edge columns plus `subject_id` for 156 nodes.
 - Many zeros are acceptable when lesions do not intersect atlas streamlines.
+- `edge_tract_voxels_2mm.npz` is the edge-by-voxel tract mask used for Alves-weighted edge damage.
 
 Useful command:
 
@@ -125,7 +132,6 @@ Per-system folders:
 derivatives/nt/<nt_id>/atlases/
 derivatives/nt/<nt_id>/node/
 derivatives/nt/<nt_id>/edge/
-derivatives/nt/<nt_id>/wm/
 derivatives/nt/<nt_id>/impact/
 derivatives/nt/<nt_id>/models/
 ```
@@ -134,8 +140,7 @@ Each configured `nt_id` should have:
 
 - `node/nt_roi_156.csv`: Hansen gray-matter ROI mean.
 - `node/nt_node_damage.csv`: lesion node load weighted by Hansen ROI value.
-- `edge/nt_edge_lqt.csv`: LQT edge disconnection weighted by two endpoint ROI values.
-- `wm/nt_wm_damage.csv`: lesion overlap summary on the Alves/Functionnectome WM map.
+- `edge/nt_edge_lqt.csv`: lesion voxels on each edge tract weighted by Alves WM map values.
 - `impact/nt_impact_scores.csv`: 10-fold out-of-fold lesion and NT impact scores.
 - `models/model_prediction_performance.csv`: 10-fold out-of-sample prediction metrics.
 - `models/model_prediction_pairwise_bootstrap.csv`: paired bootstrap model comparisons.
@@ -171,6 +176,6 @@ PY
 - `ordinal_c_index`: higher is better.
 - `binary_auc_mrs_le_threshold`: higher is better.
 
-The primary comparison is `nt_model_prediction_performance.csv` plus
-`nt_model_prediction_pairwise_bootstrap.csv`. Full-sample ordered-model fit
+The primary comparison is `model_prediction_performance.csv` plus
+`model_prediction_pairwise_bootstrap.csv`. Full-sample ordered-model fit
 tables are secondary.

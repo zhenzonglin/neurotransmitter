@@ -9,11 +9,12 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 import pandas as pd
-from nilearn.image import resample_to_img
+from scipy import sparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from build_edge_tract_matrix import build_edge_matrix  # noqa: E402
 from compute_impact_scores import (  # noqa: E402
     compute_lesion_node_load,
     fit_ordinal_impact_model,
@@ -23,7 +24,7 @@ from compute_impact_scores import (  # noqa: E402
     write_full_sample_keys,
 )
 from nt_analysis.config import analysis_table, ensure_dir, load_config, project_path  # noqa: E402
-from nt_analysis.images import resample_like, save_img  # noqa: E402
+from nt_analysis.images import resample_like  # noqa: E402
 from nt_analysis.tables import write_csv  # noqa: E402
 
 
@@ -51,21 +52,6 @@ def raw_paths(config: dict, spec: dict[str, object]) -> tuple[Path, Path]:
     return hansen, alves
 
 
-def save_wm_mask(raw_wm: Path, reference_2mm: Path, output: Path) -> None:
-    """Save the Alves white-matter support mask in 2mm space."""
-    raw_img = nib.load(str(raw_wm))
-    raw_data = raw_img.get_fdata()
-    raw_mask = (np.isfinite(raw_data) & (raw_data != 0)).astype(np.uint8)
-    raw_mask_img = nib.Nifti1Image(raw_mask, raw_img.affine, raw_img.header)
-    raw_mask_img.set_data_dtype(np.uint8)
-    ref_img = nib.load(str(reference_2mm))
-    mask_img = resample_to_img(raw_mask_img, ref_img, interpolation="nearest", force_resample=True, copy_header=True)
-    mask = (mask_img.get_fdata() != 0).astype(np.uint8)
-    out = nib.Nifti1Image(mask, ref_img.affine, ref_img.header)
-    out.set_data_dtype(np.uint8)
-    save_img(out, output)
-
-
 def prepare_nt_maps(config: dict, spec: dict[str, object], reference_2mm: Path, out_dir: Path) -> dict[str, Path]:
     """Resample Hansen and Alves maps into the analysis space."""
     nt_id = str(spec["id"])
@@ -73,11 +59,9 @@ def prepare_nt_maps(config: dict, spec: dict[str, object], reference_2mm: Path, 
     atlas_dir = ensure_dir(out_dir / "atlases")
     gray_2mm = atlas_dir / f"{nt_id}_hansen_gray_2mm.nii.gz"
     wm_2mm = atlas_dir / f"{nt_id}_alves_wm_2mm.nii.gz"
-    wm_mask_2mm = atlas_dir / f"{nt_id}_alves_wm_mask_2mm.nii.gz"
     resample_like(hansen, reference_2mm, gray_2mm, "continuous")
     resample_like(alves, reference_2mm, wm_2mm, "continuous")
-    save_wm_mask(alves, reference_2mm, wm_mask_2mm)
-    return {"gray_2mm": gray_2mm, "wm_2mm": wm_2mm, "wm_mask_2mm": wm_mask_2mm}
+    return {"gray_2mm": gray_2mm, "wm_2mm": wm_2mm}
 
 
 def compute_roi_table(config: dict, gray_2mm: Path, out_dir: Path) -> pd.DataFrame:
@@ -113,42 +97,26 @@ def build_node_damage(lesion_node: pd.DataFrame, roi_table: pd.DataFrame, out_di
     return node
 
 
-def build_edge_damage(config: dict, roi_table: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
-    """Create edge-level neurotransmitter-weighted disconnection features."""
-    edge_path = project_path(config, config["outputs"]["edge_dir"], analysis_table(config, "lqt_edge_disconnection", "lqt_edge_disconnection.csv"))
-    raw_edge = pd.read_csv(edge_path)
-    values = raw_edge.copy()
-    roi_mean = dict(zip(roi_table["roi"].astype(int), roi_table["nt_mean"].astype(float)))
-    edge_cols = [col for col in values.columns if col.startswith("edge_")]
-    weights = []
-    for col in edge_cols:
-        _, left, right = col.split("_")
-        weights.append(roi_mean[int(left)] * roi_mean[int(right)])
-    values[edge_cols] = values[edge_cols].to_numpy(dtype=float) * np.asarray(weights, dtype=float)[None, :]
-    write_csv(values, out_dir / "edge" / "nt_edge_lqt.csv")
-    return values
-
-
-def compute_wm_damage(manifest: pd.DataFrame, wm_2mm: Path, out_dir: Path) -> pd.DataFrame:
-    """Compute subject-level Alves WM map damage summaries."""
-    wm = np.nan_to_num(nib.load(str(wm_2mm)).get_fdata(), nan=0.0, posinf=0.0, neginf=0.0)
-    denominator = float(np.sum(wm))
+def build_edge_damage(config: dict, wm_2mm: Path, manifest: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
+    """Create edge features from lesion voxels, tract masks, and Alves WM maps."""
+    shared_dir = project_path(config, config["outputs"]["edge_dir"])
+    matrix_path = shared_dir / "edge_tract_voxels_2mm.npz"
+    edge_path = shared_dir / "edge_tract_voxels_2mm_edges.csv"
+    if not matrix_path.exists() or not edge_path.exists():
+        # 首次运行时生成边-体素掩膜矩阵
+        build_edge_matrix(config)
+    edge_matrix = sparse.load_npz(matrix_path).astype(np.float32)
+    edge_names = pd.read_csv(edge_path)["edge"].tolist()
+    wm = np.nan_to_num(nib.load(str(wm_2mm)).get_fdata(), nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32).ravel()
     rows = []
-    for row in manifest[["subject_id", "lesion_path", "lesion_volume_ml"]].itertuples(index=False):
-        lesion = nib.load(str(row.lesion_path)).get_fdata() != 0
-        lesion_voxels = max(int(np.sum(lesion)), 1)
-        weighted = float(np.sum(wm[lesion]))
-        rows.append(
-            {
-                "subject_id": row.subject_id,
-                "wm_damage_fraction": weighted / denominator if denominator != 0 else np.nan,
-                "wm_lesion_density": weighted / lesion_voxels,
-                "lesion_volume_ml": row.lesion_volume_ml,
-            }
-        )
-    wm_damage = pd.DataFrame(rows)
-    write_csv(wm_damage, out_dir / "wm" / "nt_wm_damage.csv")
-    return wm_damage
+    for row in manifest[["subject_id", "lesion_path"]].itertuples(index=False):
+        lesion = (nib.load(str(row.lesion_path)).get_fdata().ravel() != 0).astype(np.float32)
+        weighted_voxels = lesion * wm
+        values = edge_matrix @ weighted_voxels
+        rows.append({"subject_id": row.subject_id, **dict(zip(edge_names, np.asarray(values).ravel().astype(float)))})
+    edge = pd.DataFrame(rows)
+    write_csv(edge, out_dir / "edge" / "nt_edge_lqt.csv")
+    return edge
 
 
 def nt_config(config: dict, out_dir: Path) -> dict:
@@ -162,14 +130,13 @@ def run_one_nt(config: dict, spec: dict[str, object], manifest: pd.DataFrame, le
     """Run one neurotransmitter analysis."""
     nt_id = str(spec["id"])
     out_dir = nt_root(config, nt_id)
-    for name in ["atlases", "node", "edge", "wm", "impact", "models"]:
+    for name in ["atlases", "node", "edge", "impact", "models"]:
         ensure_dir(out_dir / name)
 
     maps = prepare_nt_maps(config, spec, Path(manifest.loc[0, "lesion_path"]), out_dir)
     roi_table = compute_roi_table(config, maps["gray_2mm"], out_dir)
     node = build_node_damage(lesion_node, roi_table, out_dir)
-    edge = build_edge_damage(config, roi_table, out_dir)
-    compute_wm_damage(manifest, maps["wm_2mm"], out_dir)
+    edge = build_edge_damage(config, maps["wm_2mm"], manifest, out_dir)
 
     config_one = nt_config(config, out_dir)
     impact_dir = ensure_dir(out_dir / "impact")
