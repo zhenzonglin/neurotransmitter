@@ -17,6 +17,8 @@ Rscript scripts/install_lqt_r_deps.R --project-dir /home/zhenzong2/analysis/neur
 Rscript scripts/run_lqt_edges.R --config "${config_path}"
 python scripts/build_edge_tract_matrix.py --config "${config_path}"
 python scripts/run_multi_nt_analysis.py --config "${config_path}"
+python scripts/run_ml_ntdc_analysis.py --config "${config_path}"
+python scripts/generate_html_report.py --config "${config_path}"
 ```
 
 ## 2. Code Flow
@@ -36,6 +38,8 @@ flowchart TD
     H["Hansen + Alves maps"] --> G
     G --> I["derivatives/nt/<nt_id>"]
     G --> J["derivatives/nt/summary"]
+    J --> M["run_ml_ntdc_analysis.py"]
+    M --> N["derivatives/nt_ml/ml_ntdc"]
 ```
 
 ## 3. QC Tables
@@ -50,10 +54,12 @@ derivatives/qc/phenotype_merge_qc.csv
 
 Expected:
 
+- One row per real subject.
 - `shape` is `91x109x91`.
 - `voxel_volume_mm3` is close to `8`.
 - `lesion_volume_ml` is nonzero.
 - Clinical columns used in the model are present.
+- `subject_id` matches the lesion filename and phenotype ID after normalization.
 
 Useful command:
 
@@ -144,6 +150,23 @@ Each configured `nt_id` should have:
 - `impact/nt_impact_scores.csv`: 10-fold out-of-fold lesion and NT impact scores.
 - `models/model_prediction_performance.csv`: 10-fold out-of-sample prediction metrics.
 - `models/model_prediction_pairwise_bootstrap.csv`: paired bootstrap model comparisons.
+- Prediction models are `Clinical`, `Clinical + SDC`, `Clinical + NTDC`, and `Clinical + SDC + NTDC`.
+
+ML-selected NTDC results:
+
+```text
+derivatives/nt_ml/ml_ntdc/ml_ntdc_scores.csv
+derivatives/nt_ml/ml_ntdc/ml_ntdc_selection_summary.csv
+derivatives/nt_ml/ml_ntdc/models/model_prediction_performance.csv
+derivatives/nt_ml/ml_ntdc/models/model_prediction_pairwise_bootstrap.csv
+```
+
+Flow report:
+
+```text
+derivatives/reports/nt_clsm_flow_report.html
+derivatives/reports/figures/
+```
 
 Useful command:
 

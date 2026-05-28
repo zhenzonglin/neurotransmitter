@@ -61,6 +61,15 @@ def build_manifest(config: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def merge_manifest_phenotype(manifest: pd.DataFrame, phenotype: pd.DataFrame) -> pd.DataFrame:
+    """Merge lesion manifest and phenotype without subject duplication."""
+    merged = manifest.merge(phenotype, on="subject_id", how="left")
+    if merged["subject_id"].duplicated().any():
+        duplicated = sorted(merged.loc[merged["subject_id"].duplicated(), "subject_id"].astype(str).unique())
+        raise ValueError(f"duplicated subject_id after merge: {duplicated[:10]}")
+    return merged
+
+
 def prepare_reference_images(config: dict, reference_2mm: Path) -> None:
     """Resample atlas images into analysis spaces."""
     atlas = project_path(config, config["atlases"]["atlas4s156"]["nii"])
@@ -113,15 +122,15 @@ def main() -> None:
 
     manifest = build_manifest(config)
     phenotype = load_phenotype(config)
-    merged = manifest.merge(phenotype, on="subject_id", how="left")
+    analysis_manifest = merge_manifest_phenotype(manifest, phenotype)
     qc_dir = project_path(config, config["outputs"]["qc_dir"])
     write_csv(manifest, qc_dir / "lesion_qc.csv")
-    write_csv(merged, qc_dir / "subject_manifest.csv")
+    write_csv(analysis_manifest, qc_dir / "subject_manifest.csv")
 
     outcome = outcome_column(config)
     covariates = analysis_covariates(config, "model_covariates")
     keep = ["subject_id", "lesion_path", outcome, *covariates]
-    write_csv(merged[[column for column in keep if column in merged.columns]], qc_dir / "phenotype_merge_qc.csv")
+    write_csv(analysis_manifest[[column for column in keep if column in analysis_manifest.columns]], qc_dir / "phenotype_merge_qc.csv")
 
     reference_2mm = Path(manifest.loc[0, "lesion_path"])
     prepare_reference_images(config, reference_2mm)

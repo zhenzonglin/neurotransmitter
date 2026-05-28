@@ -161,12 +161,13 @@ raw_rows <- list()
 for (row_index in seq_len(nrow(manifest))) {
   subject_id <- manifest$subject_id[row_index]
   lesion_path <- manifest$lesion_path[row_index]
-  subject_dir <- file.path(lqt_dir, subject_id)
-  out_matrix <- file.path(subject_dir, paste0(subject_id, "_lqt_sdc_matrix.csv"))
+  cache_id <- subject_id
+  subject_dir <- file.path(lqt_dir, cache_id)
+  out_matrix <- file.path(subject_dir, paste0(cache_id, "_lqt_sdc_matrix.csv"))
   if (force && file.exists(out_matrix)) {
     unlink(c(
       out_matrix,
-      file.path(subject_dir, paste0(subject_id, "_lqt_disconnectivity.RData"))
+      file.path(subject_dir, paste0(cache_id, "_lqt_disconnectivity.RData"))
     ))
   }
   if (!file.exists(out_matrix)) {
@@ -180,7 +181,7 @@ for (row_index in seq_len(nrow(manifest))) {
     sdc <- subject_con / atlas_con
     sdc[is.na(sdc) | is.infinite(sdc)] <- 0
     write.csv(sdc, out_matrix, row.names = FALSE)
-    save(subject_con, sdc, file = file.path(subject_dir, paste0(subject_id, "_lqt_disconnectivity.RData")))
+    save(subject_con, sdc, file = file.path(subject_dir, paste0(cache_id, "_lqt_disconnectivity.RData")))
   } else {
     sdc <- as.matrix(read.csv(out_matrix))
   }

@@ -18,6 +18,10 @@ inputs:
       '0': 0
 analysis:
   outcome: mrs_3m
+  cv_group_column: subject_id
+  sdc_predictor: sdc
+  ntdc_predictor: ntdc
+  ntdc_label: NTDC
   model_covariates:
   - age
   - sex
@@ -38,6 +42,23 @@ impact:
   edge_top_k: 200
   use_q_if_available: true
   prediction_bootstrap: 1000
+ml_ntdc:
+  inner_splits: 5
+  l1_ratios:
+  - 0.1
+  - 0.5
+  - 0.9
+  - 1.0
+  alphas:
+  - 0.0001
+  - 0.0003
+  - 0.001
+  - 0.003
+  - 0.01
+  - 0.03
+  - 0.1
+  - 0.3
+  - 1.0
 neurotransmitters:
 - id: a4b2
   label: alpha4beta2 nicotinic acetylcholine receptor

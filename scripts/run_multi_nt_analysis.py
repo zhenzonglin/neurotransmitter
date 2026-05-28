@@ -163,7 +163,7 @@ def summarize_outputs(config: dict, rows: list[dict[str, object]]) -> None:
         pair_path = out_dir / "models" / "model_prediction_pairwise_bootstrap.csv"
         pair = pd.read_csv(pair_path)
         pair.insert(0, "nt_id", nt_id)
-        primary.append(pair[pair["model_a"] == "clinical_only"].copy())
+        primary.append(pair[pair["model_a"] == "Clinical"].copy())
     if performance:
         write_csv(pd.concat(performance, ignore_index=True), summary_dir / "nt_prediction_performance.csv")
     if primary:
@@ -243,10 +243,6 @@ def main() -> None:
         return
 
     manifest = pd.read_csv(project_path(config, config["outputs"]["qc_dir"], "subject_manifest.csv"))
-    if "base_subject_id" not in manifest.columns:
-        manifest["base_subject_id"] = manifest["subject_id"]
-    if "repeat_id" not in manifest.columns:
-        manifest["repeat_id"] = 1
     lesion_node = compute_lesion_node_load(config, manifest)
     _, lesion_edge = load_lesion_feature_tables(config, manifest)
     rows = []

@@ -1,6 +1,6 @@
-# NT-CLSM Pilot
+# NT-CLSM Analysis
 
-This repository runs neurotransmitter-focused NT-CLSM pilots for acute ischemic stroke.
+This repository runs neurotransmitter-focused NT-CLSM analyses for acute ischemic stroke.
 The workflow is lesion-first: MNI 2mm lesion masks are mapped to 4S156 nodes,
 LQT-R/DSI Studio estimates lesion-only structural disconnection edges, and
 Hansen plus Alves/Functionnectome neurotransmitter maps weight node and edge
@@ -41,7 +41,8 @@ python scripts/prepare_inputs.py --config "${config_path}"
 Rscript scripts/run_lqt_edges.R --config "${config_path}"
 python scripts/build_edge_tract_matrix.py --config "${config_path}"
 python scripts/run_multi_nt_analysis.py --config "${config_path}"
-python scripts/run_nt_profile_analysis.py --config "${config_path}"
+python scripts/run_ml_ntdc_analysis.py --config "${config_path}"
+python scripts/generate_html_report.py --config "${config_path}"
 ```
 
 ## Configuration
@@ -50,6 +51,11 @@ Change working path, input files, outcome, covariates, binary threshold, and
 analysis table names in `notebooks/00_project_config.ipynb`, then rerun its
 write-config cell. The scripts infer cohort size from
 `derivatives/qc/subject_manifest.csv`.
+
+The formal workflow uses one row per real subject. It does not duplicate
+subjects for pilot-scale testing. Cross-validation groups default to
+`subject_id` through `analysis.cv_group_column`; change that field only when
+the same participant has repeated rows that must stay in the same fold.
 
 `run_multi_nt_analysis.py` applies the same node, edge, impact-score, and
 prediction workflow to all neurotransmitter maps configured under
@@ -87,36 +93,31 @@ The shared tract mask matrix is stored at:
 derivatives/shared/edge_tract_voxels_2mm.npz
 ```
 
+Prediction models use readable names:
+
+```text
+Clinical
+Clinical + SDC
+Clinical + NTDC
+Clinical + SDC + NTDC
+```
+
+`SDC` is the lesion-only structural damage contribution. `NTDC` is the
+neurotransmitter damage contribution after combining node and edge impact
+scores.
+
+`scripts/run_ml_ntdc_analysis.py` performs nested elastic-net screening across
+the 13 neurotransmitter-specific NTDC scores and writes a single `ML-NTDC`
+score. Its final model set is:
+
+```text
+Clinical
+Clinical + SDC
+Clinical + ML-NTDC
+Clinical + SDC + ML-NTDC
+```
+
 `scripts/compute_impact_scores.py` contains the reusable impact-score and
-prediction functions. It is imported by `run_multi_nt_analysis.py`; it is not a
-separate DAT-only pipeline entrypoint.
-
-## Integrated 13-NT Profile
-
-`run_nt_profile_analysis.py` keeps the single-NT outputs unchanged and creates a
-separate integrated profile branch:
-
-```text
-derivatives/nt_profile/integrated_13nt/
-```
-
-It robustly scales each of the 13 Hansen gray maps and 13 Alves WM maps to
-0-1, then averages them voxel by voxel. The node feature is computed inside
-each ROI as:
-
-```text
-node_profile_damage[i,r] =
-sum_v lesion_i(v) * ROI_r(v) * integrated_Hansen_profile(v) / sum_v ROI_r(v)
-```
-
-The edge feature is computed as:
-
-```text
-edge_profile_damage[i,e] =
-sum_v lesion_i(v) * edge_tract_mask_e(v) * integrated_Alves_WM_profile(v)
-```
-
-The branch writes node/edge LSM statistics, 10-fold impact scores, and the same
-prediction model comparison tables as the single-NT workflow.
+prediction functions. It is imported by `run_multi_nt_analysis.py`.
 
 Large imaging data, LQT resources, and derivatives are excluded from git.

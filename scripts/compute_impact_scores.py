@@ -149,6 +149,27 @@ def zscore(values: pd.Series) -> pd.Series:
     return (values - values.mean(skipna=True)) / sd
 
 
+def add_cv_group(config: dict, data: pd.DataFrame) -> pd.DataFrame:
+    """Add the cross-validation group column."""
+    out = data.copy()
+    group_col = str(config.get("analysis", {}).get("cv_group_column", "subject_id"))
+    if group_col not in out.columns:
+        group_col = "subject_id"
+    # 默认每个真实被试独立分组
+    out["cv_group"] = out[group_col].astype(str)
+    return out
+
+
+def standard_score_name(config: dict, key: str, default: str) -> str:
+    """Return configured model score column names."""
+    return str(config.get("analysis", {}).get(key, default))
+
+
+def standard_score_label(config: dict, key: str, default: str) -> str:
+    """Return configured model display labels."""
+    return str(config.get("analysis", {}).get(key, default))
+
+
 def run_cross_validated_impact(
     config: dict,
     phenotype: pd.DataFrame,
@@ -170,15 +191,16 @@ def run_cross_validated_impact(
     edge_top_k = int(impact_cfg.get("edge_top_k", 200))
     use_q = bool(impact_cfg.get("use_q_if_available", True))
 
-    require_columns(["subject_id", outcome, *covariates, "base_subject_id"], list(phenotype.columns), "phenotype")
-    merged_ids = phenotype[["subject_id", "base_subject_id", "repeat_id", outcome, *covariates]].dropna(subset=[outcome, *covariates])
-    groups = merged_ids["base_subject_id"].astype(str).to_numpy()
+    require_columns(["subject_id", outcome, *covariates], list(phenotype.columns), "phenotype")
+    group_source = add_cv_group(config, phenotype)
+    merged_ids = group_source[["subject_id", "cv_group", outcome, *covariates]].dropna(subset=[outcome, *covariates])
+    groups = merged_ids["cv_group"].astype(str).to_numpy()
     unique_groups = np.unique(groups)
     n_splits = min(n_splits, len(unique_groups))
     if n_splits < 2:
         raise RuntimeError("at least two subject groups are required for cross-validation")
 
-    scores = merged_ids[["subject_id", "base_subject_id", "repeat_id", outcome, *covariates]].copy()
+    scores = merged_ids[["subject_id", "cv_group", outcome, *covariates]].copy()
     scores["fold"] = np.nan
     scores["lesion_node_impact"] = np.nan
     scores["lesion_edge_impact"] = np.nan
@@ -234,8 +256,8 @@ def run_cross_validated_impact(
                 "fold": fold_id,
                 "n_train": len(train_ids),
                 "n_test": len(test_ids),
-                "n_train_groups": len(set(merged_ids.iloc[train_idx]["base_subject_id"])),
-                "n_test_groups": len(set(merged_ids.iloc[test_idx]["base_subject_id"])),
+                "n_train_groups": len(set(merged_ids.iloc[train_idx]["cv_group"])),
+                "n_test_groups": len(set(merged_ids.iloc[test_idx]["cv_group"])),
                 "selected_lesion_nodes": int((lesion_node_weights["weight"] != 0).sum()),
                 "selected_lesion_edges": int((lesion_edge_weights["weight"] != 0).sum()),
                 "selected_nt_nodes": int((node_weights["weight"] != 0).sum()),
@@ -245,11 +267,11 @@ def run_cross_validated_impact(
             }
         )
 
-    scores["lesion_total_impact"] = zscore(scores["lesion_node_impact"]) + zscore(scores["lesion_edge_impact"])
-    scores["nt_total_impact"] = zscore(scores["nt_node_impact"]) + zscore(scores["nt_edge_impact"])
+    scores["sdc"] = zscore(scores["lesion_node_impact"]) + zscore(scores["lesion_edge_impact"])
+    scores["ntdc"] = zscore(scores["nt_node_impact"]) + zscore(scores["nt_edge_impact"])
     scores["dataset"] = dataset_name
     write_csv(scores, out_dir / "nt_impact_scores.csv")
-    write_csv(scores[["subject_id", "fold", "lesion_node_impact", "lesion_edge_impact", "lesion_total_impact", "dataset"]], out_dir / "lesion_impact_scores.csv")
+    write_csv(scores[["subject_id", "fold", "lesion_node_impact", "lesion_edge_impact", "sdc", "dataset"]], out_dir / "lesion_impact_scores.csv")
     write_csv(pd.DataFrame(fold_rows), out_dir / "nt_impact_fold_summary.csv")
     return scores
 
@@ -299,18 +321,17 @@ def fit_ordered_model(data: pd.DataFrame, outcome: str, predictors: list[str]) -
         return None, "failed", str(error)
 
 
-def model_specs(covariates: list[str]) -> list[tuple[str, list[str]]]:
+def model_specs(covariates: list[str], config: dict | None = None) -> list[tuple[str, list[str]]]:
     """Return the ordered model set."""
+    config = config or {}
+    sdc_col = standard_score_name(config, "sdc_predictor", "sdc")
+    ntdc_col = standard_score_name(config, "ntdc_predictor", "ntdc")
+    ntdc_label = standard_score_label(config, "ntdc_label", "NTDC")
     return [
-        ("clinical_only", covariates),
-        ("clinical_lesion_impact", covariates + ["lesion_total_impact"]),
-        ("clinical_nt_node_impact", covariates + ["nt_node_impact"]),
-        ("clinical_nt_edge_impact", covariates + ["nt_edge_impact"]),
-        ("clinical_nt_node_edge_impact", covariates + ["nt_node_impact", "nt_edge_impact"]),
-        (
-            "clinical_lesion_nt_node_edge_impact",
-            covariates + ["lesion_total_impact", "nt_node_impact", "nt_edge_impact"],
-        ),
+        ("Clinical", covariates),
+        ("Clinical + SDC", covariates + [sdc_col]),
+        (f"Clinical + {ntdc_label}", covariates + [ntdc_col]),
+        (f"Clinical + SDC + {ntdc_label}", covariates + [sdc_col, ntdc_col]),
     ]
 
 
@@ -504,7 +525,7 @@ def run_cross_validated_prediction(config: dict, scores: pd.DataFrame, out_dir: 
     """Run 10-fold out-of-sample prediction and bootstrap model comparisons."""
     outcome = outcome_column(config)
     covariates = analysis_covariates(config, "model_covariates")
-    specs = model_specs(covariates)
+    specs = model_specs(covariates, config)
     all_predictors = sorted({term for _, terms in specs for term in terms})
     binary_cfg = config.get("analysis", {}).get("binary_outcome", {})
     threshold = float(binary_cfg.get("threshold", 2))
@@ -705,7 +726,7 @@ def fit_ordinal_impact_model(config: dict, scores: pd.DataFrame, impact_dir: Pat
     outcome = outcome_column(config)
     covariates = analysis_covariates(config, "model_covariates")
     model_dir = ensure_dir(project_path(config, config["outputs"]["model_dir"]))
-    specs = model_specs(covariates)
+    specs = model_specs(covariates, config)
     all_predictors = sorted({term for _, terms in specs for term in terms})
     data = scores.dropna(subset=[outcome, *all_predictors]).copy()
     data[outcome] = data[outcome].astype(int)
@@ -748,7 +769,7 @@ def fit_ordinal_impact_model(config: dict, scores: pd.DataFrame, impact_dir: Pat
         rows.append(row)
 
     comparison = pd.DataFrame(rows)
-    base = fits.get("clinical_only")
+    base = fits.get("Clinical")
     if base is not None:
         for index, row in comparison.iterrows():
             fit = fits.get(row["model"])
@@ -757,7 +778,7 @@ def fit_ordinal_impact_model(config: dict, scores: pd.DataFrame, impact_dir: Pat
             comparison.loc[index, "delta_aic_vs_clinical"] = float(fit.aic - base.aic)
             comparison.loc[index, "delta_bic_vs_clinical"] = float(fit.bic - base.bic)
             comparison.loc[index, "delta_llf_vs_clinical"] = float(fit.llf - base.llf)
-            if row["model"] == "clinical_only":
+            if row["model"] == "Clinical":
                 comparison.loc[index, "lr_stat_vs_clinical"] = np.nan
                 comparison.loc[index, "lr_df_vs_clinical"] = np.nan
                 comparison.loc[index, "lr_p_vs_clinical"] = np.nan
@@ -772,7 +793,8 @@ def fit_ordinal_impact_model(config: dict, scores: pd.DataFrame, impact_dir: Pat
     write_csv(pd.DataFrame(term_rows), model_dir / "model_comparison_terms.csv")
     write_pairwise_model_comparison(specs, fits, int(data.shape[0]), model_dir)
 
-    nt_model = comparison[comparison["model"] == "clinical_nt_node_edge_impact"].copy()
+    ntdc_label = standard_score_label(config, "ntdc_label", "NTDC")
+    nt_model = comparison[comparison["model"] == f"Clinical + SDC + {ntdc_label}"].copy()
     if base is not None and not nt_model.empty:
         nt_model = nt_model.rename(
             columns={
@@ -785,8 +807,7 @@ def fit_ordinal_impact_model(config: dict, scores: pd.DataFrame, impact_dir: Pat
         )
         nt_model["base_aic"] = float(base.aic)
         nt_model["base_llf"] = float(base.llf)
-        nt_model["model"] = "ordinal_mrs_nt_impact"
+        nt_model["model"] = f"ordinal_mrs_{ntdc_label.lower().replace('-', '_')}"
         write_csv(nt_model[["model", "n", "base_aic", "full_aic", "base_llf", "full_llf", "lr_stat", "lr_df", "lr_p", "status"]], impact_dir / "nt_impact_model_performance.csv")
     terms = pd.DataFrame(term_rows)
-    write_csv(terms[terms["model"] == "clinical_nt_node_edge_impact"], impact_dir / "nt_impact_ordinal_model.csv")
-
+    write_csv(terms[terms["model"] == f"Clinical + SDC + {ntdc_label}"], impact_dir / "nt_impact_ordinal_model.csv")
