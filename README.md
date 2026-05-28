@@ -41,6 +41,7 @@ python scripts/prepare_inputs.py --config "${config_path}"
 Rscript scripts/run_lqt_edges.R --config "${config_path}"
 python scripts/build_edge_tract_matrix.py --config "${config_path}"
 python scripts/run_multi_nt_analysis.py --config "${config_path}"
+python scripts/run_nt_profile_analysis.py --config "${config_path}"
 ```
 
 ## Configuration
@@ -89,5 +90,33 @@ derivatives/shared/edge_tract_voxels_2mm.npz
 `scripts/compute_impact_scores.py` contains the reusable impact-score and
 prediction functions. It is imported by `run_multi_nt_analysis.py`; it is not a
 separate DAT-only pipeline entrypoint.
+
+## Integrated 13-NT Profile
+
+`run_nt_profile_analysis.py` keeps the single-NT outputs unchanged and creates a
+separate integrated profile branch:
+
+```text
+derivatives/nt_profile/integrated_13nt/
+```
+
+It robustly scales each of the 13 Hansen gray maps and 13 Alves WM maps to
+0-1, then averages them voxel by voxel. The node feature is computed inside
+each ROI as:
+
+```text
+node_profile_damage[i,r] =
+sum_v lesion_i(v) * ROI_r(v) * integrated_Hansen_profile(v) / sum_v ROI_r(v)
+```
+
+The edge feature is computed as:
+
+```text
+edge_profile_damage[i,e] =
+sum_v lesion_i(v) * edge_tract_mask_e(v) * integrated_Alves_WM_profile(v)
+```
+
+The branch writes node/edge LSM statistics, 10-fold impact scores, and the same
+prediction model comparison tables as the single-NT workflow.
 
 Large imaging data, LQT resources, and derivatives are excluded from git.
