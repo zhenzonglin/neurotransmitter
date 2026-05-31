@@ -61,6 +61,19 @@ def build_manifest(config: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def apply_lesion_qc(config: dict, manifest: pd.DataFrame) -> pd.DataFrame:
+    """Apply lesion-level inclusion rules."""
+    qc_cfg = config.get("qc", {})
+    exclude_empty = bool(qc_cfg.get("exclude_empty_lesion", True))
+    min_volume = float(qc_cfg.get("min_lesion_volume_ml", 0.0))
+    out = manifest.copy()
+    out["is_empty_lesion"] = out["lesion_volume_ml"] <= min_volume
+    out["included_by_lesion_qc"] = ~(exclude_empty & out["is_empty_lesion"])
+    # 空病灶保留在QC表中，但不进入主分析
+    out["lesion_qc_exclusion_reason"] = np.where(out["included_by_lesion_qc"], "", "empty_lesion")
+    return out
+
+
 def merge_manifest_phenotype(manifest: pd.DataFrame, phenotype: pd.DataFrame) -> pd.DataFrame:
     """Merge lesion manifest and phenotype without subject duplication."""
     merged = manifest.merge(phenotype, on="subject_id", how="left")
@@ -121,10 +134,14 @@ def main() -> None:
         ensure_dir(project_path(config, config["outputs"][key]))
 
     manifest = build_manifest(config)
+    lesion_qc = apply_lesion_qc(config, manifest)
+    active_manifest = lesion_qc.loc[lesion_qc["included_by_lesion_qc"]].copy()
+    if active_manifest.empty:
+        raise RuntimeError("no lesion masks passed lesion QC")
     phenotype = load_phenotype(config)
-    analysis_manifest = merge_manifest_phenotype(manifest, phenotype)
+    analysis_manifest = merge_manifest_phenotype(active_manifest, phenotype)
     qc_dir = project_path(config, config["outputs"]["qc_dir"])
-    write_csv(manifest, qc_dir / "lesion_qc.csv")
+    write_csv(lesion_qc, qc_dir / "lesion_qc.csv")
     write_csv(analysis_manifest, qc_dir / "subject_manifest.csv")
 
     outcome = outcome_column(config)
@@ -132,7 +149,7 @@ def main() -> None:
     keep = ["subject_id", "lesion_path", outcome, *covariates]
     write_csv(analysis_manifest[[column for column in keep if column in analysis_manifest.columns]], qc_dir / "phenotype_merge_qc.csv")
 
-    reference_2mm = Path(manifest.loc[0, "lesion_path"])
+    reference_2mm = Path(active_manifest.iloc[0]["lesion_path"])
     prepare_reference_images(config, reference_2mm)
     compute_lqt_node_table(config)
 

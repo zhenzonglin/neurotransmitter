@@ -89,13 +89,51 @@ def plot_cohort_qc(manifest: pd.DataFrame, lesion_qc: pd.DataFrame, output: Path
     else:
         axes[1].axis("off")
 
+    raw_rows = len(lesion_qc) if not lesion_qc.empty else len(manifest)
+    if "included_by_lesion_qc" in lesion_qc.columns:
+        included_rows = int(lesion_qc["included_by_lesion_qc"].astype(bool).sum())
+    else:
+        included_rows = len(manifest)
+    if "is_empty_lesion" in lesion_qc.columns:
+        empty_rows = int(lesion_qc["is_empty_lesion"].astype(bool).sum())
+    else:
+        empty_rows = 0
     complete_cols = [column for column in ["mrs_3m", "age", "sex", "nihss", "lesion_volume_ml"] if column in manifest.columns]
     complete_rows = int(manifest[complete_cols].dropna().shape[0]) if complete_cols else len(manifest)
-    axes[2].bar(["rows", "subjects", "complete"], [len(manifest), manifest["subject_id"].nunique(), complete_rows], color=palette[:3])
+    axes[2].bar(["raw", "included", "empty", "complete"], [raw_rows, included_rows, empty_rows, complete_rows], color=palette[:4])
     axes[2].set_ylabel("Count")
-    axes[2].set_title("Analysis rows")
+    axes[2].set_title("QC inclusion")
     fig.tight_layout()
     save_figure(fig, output)
+
+
+def build_qc_summary(config: dict, manifest: pd.DataFrame, lesion_qc: pd.DataFrame) -> pd.DataFrame:
+    """汇总病灶QC规则。"""
+    qc_cfg = config.get("qc", {})
+    min_volume = float(qc_cfg.get("min_lesion_volume_ml", 0.0))
+    exclude_empty = bool(qc_cfg.get("exclude_empty_lesion", True))
+    raw_rows = len(lesion_qc) if not lesion_qc.empty else len(manifest)
+    included_rows = len(manifest)
+    if "included_by_lesion_qc" in lesion_qc.columns:
+        included_rows = int(lesion_qc["included_by_lesion_qc"].astype(bool).sum())
+    empty_rows = 0
+    if "is_empty_lesion" in lesion_qc.columns:
+        empty_rows = int(lesion_qc["is_empty_lesion"].astype(bool).sum())
+    elif "lesion_volume_ml" in lesion_qc.columns:
+        empty_rows = int((lesion_qc["lesion_volume_ml"] <= min_volume).sum())
+    excluded_rows = max(raw_rows - included_rows, 0)
+    complete_cols = [column for column in ["mrs_3m", "age", "sex", "nihss", "lesion_volume_ml"] if column in manifest.columns]
+    complete_rows = int(manifest[complete_cols].dropna().shape[0]) if complete_cols else len(manifest)
+    return pd.DataFrame(
+        [
+            {"item": "raw_lesion_masks", "value": raw_rows, "rule": "all readable lesion masks"},
+            {"item": "exclude_empty_lesion", "value": str(exclude_empty).lower(), "rule": f"lesion_volume_ml <= {min_volume:g}"},
+            {"item": "empty_lesions", "value": empty_rows, "rule": "flagged in lesion_qc.csv"},
+            {"item": "excluded_by_lesion_qc", "value": excluded_rows, "rule": "not included in subject_manifest.csv"},
+            {"item": "included_after_lesion_qc", "value": included_rows, "rule": "used by downstream analysis scripts"},
+            {"item": "complete_analysis_rows", "value": complete_rows, "rule": "non-missing outcome and configured covariates"},
+        ]
+    )
 
 
 def plot_selection(selection: pd.DataFrame, output: Path) -> None:
@@ -253,6 +291,8 @@ def render_html(context: dict[str, object], output: Path) -> None:
       <div class="figure-grid">
         <figure><img src="{{ figures.cohort_qc }}" alt="cohort qc"><figcaption>Figure 1. Cohort and lesion QC.</figcaption></figure>
       </div>
+      <h3>lesion QC summary</h3>
+      <div class="table-wrap">{{ qc_summary_table }}</div>
       <h3>subject manifest</h3>
       <div class="table-wrap">{{ manifest_table }}</div>
     </section>
@@ -343,6 +383,9 @@ def main() -> None:
     plot_model_performance(dopamine_performance, figure_paths["dopamine_performance"])
     plot_pairwise(dopamine_pairwise, figure_paths["dopamine_pairwise_delta"])
 
+    qc_summary = build_qc_summary(config, manifest, lesion_qc)
+    qc_summary_path = report_dir / "lesion_qc_summary.csv"
+    qc_summary.to_csv(qc_summary_path, index=False)
     file_index = build_file_index(project_dir)
     file_index_path = report_dir / "report_file_index.csv"
     file_index.to_csv(file_index_path, index=False)
@@ -353,6 +396,7 @@ def main() -> None:
             "project_dir": project_dir.as_posix(),
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "figures": figures,
+            "qc_summary_table": table_html(qc_summary, 20),
             "manifest_table": table_html(manifest, 12),
             "selection_table": table_html(selection, 20),
             "fold_table": table_html(folds, 20),

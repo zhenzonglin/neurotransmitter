@@ -92,6 +92,10 @@ analysis table names in `notebooks/00_project_config.ipynb`, then rerun its
 write-config cell. The scripts infer cohort size from
 `derivatives/qc/subject_manifest.csv`.
 
+Empty lesion masks are kept in `derivatives/qc/lesion_qc.csv` but excluded
+from `derivatives/qc/subject_manifest.csv` when `qc.exclude_empty_lesion` is
+true. Downstream LQT, NTDC, and prediction scripts use `subject_manifest.csv`.
+
 The formal workflow uses one row per real subject. It does not duplicate
 subjects for pilot-scale testing. Cross-validation groups default to
 `subject_id` through `analysis.cv_group_column`; change that field only when

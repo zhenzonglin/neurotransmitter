@@ -16,6 +16,9 @@ inputs:
       女: 0
       '1': 1
       '0': 0
+qc:
+  exclude_empty_lesion: true
+  min_lesion_volume_ml: 0.0
 analysis:
   outcome: mrs_3m
   cv_group_column: subject_id
