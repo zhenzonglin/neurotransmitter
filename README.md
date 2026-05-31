@@ -6,6 +6,48 @@ LQT-R/DSI Studio estimates lesion-only structural disconnection edges, and
 Hansen plus Alves/Functionnectome neurotransmitter maps weight node and edge
 damage features.
 
+## GitHub And USB Migration
+
+Use GitHub for code and small text files only. Use USB transfer for private
+clinical data and large analysis resources.
+
+GitHub can include:
+
+```text
+.gitignore
+README.md
+environment.yml
+config/
+docs/
+notebooks/
+scripts/
+src/
+atlases/.gitkeep
+lesion/.gitkeep
+external/sources.lock
+```
+
+USB transfer should include:
+
+```text
+phenotype.xlsx
+lesion/
+atlases/raw/
+atlases/processed/
+atlases/lqt/
+external/lqt_data/
+```
+
+Optional USB transfer for faster resume:
+
+```text
+derivatives/shared/
+derivatives/qc/
+```
+
+Do not upload `phenotype.xlsx`, lesion masks, atlas NIfTI files, LQT resources,
+or `derivatives/` to GitHub.
+
 ## WSL entrypoint
 
 ```bash
@@ -19,7 +61,7 @@ source /home/zhenzong/anaconda3/etc/profile.d/conda.sh
 conda env create -f environment.yml
 conda activate NT_analysis
 python -m ipykernel install --user --name NT_analysis --display-name "Python (NT_analysis)"
-Rscript scripts/install_lqt_r_deps.R --project-dir /home/zhenzong2/analysis/neurotransmitter
+Rscript scripts/install_lqt_r_deps.R --project-dir "$(pwd)"
 ```
 
 ## Pipeline
@@ -35,13 +77,11 @@ paths, clinical variables, outcomes, and table names from that file.
 
 ```bash
 config_path=config/dat_config.yaml
-python scripts/fetch_reference_data.py --config "${config_path}" --maps
-python scripts/fetch_lqt_data.py --config "${config_path}"
 python scripts/prepare_inputs.py --config "${config_path}"
+Rscript scripts/install_lqt_r_deps.R --project-dir "$(pwd)"
 Rscript scripts/run_lqt_edges.R --config "${config_path}"
 python scripts/build_edge_tract_matrix.py --config "${config_path}"
-python scripts/run_multi_nt_analysis.py --config "${config_path}"
-python scripts/run_ml_ntdc_analysis.py --config "${config_path}"
+python scripts/run_ml_profile_analysis.py --config "${config_path}" --force-screening
 python scripts/generate_html_report.py --config "${config_path}"
 ```
 
@@ -57,34 +97,35 @@ subjects for pilot-scale testing. Cross-validation groups default to
 `subject_id` through `analysis.cv_group_column`; change that field only when
 the same participant has repeated rows that must stay in the same fold.
 
-`run_multi_nt_analysis.py` applies the same node, edge, impact-score, and
-prediction workflow to all neurotransmitter maps configured under
-`neurotransmitters` in `config/dat_config.yaml`. Current configured systems are
-`a4b2`, `m1`, `vacht`, `d1`, `d2`, `dat`, `nat`, `5ht1a`, `5ht1b`, `5ht2a`,
-`5ht4`, `5ht6`, and `5htt`. Outputs are written to:
+`run_ml_profile_analysis.py` performs fold-specific neurotransmitter screening,
+voxel-level profile integration, node/edge damage recomputation, LSM impact
+scoring, and out-of-sample prediction. Current configured systems are `a4b2`,
+`m1`, `vacht`, `d1`, `d2`, `dat`, `nat`, `5ht1a`, `5ht1b`, `5ht2a`, `5ht4`,
+`5ht6`, and `5htt`. Outputs are written to:
 
 ```text
-derivatives/nt/<nt_id>/
-derivatives/nt/summary/
+derivatives/ml_profile/
+derivatives/ml_profile/models/
+derivatives/ml_profile/profiles/
+derivatives/ml_profile/lsm_maps/
+derivatives/ml_profile/exploratory_profiles/
 ```
 
-Each receptor/transporter folder contains:
+The main NTDC tables are:
 
 ```text
-atlases/<nt_id>_hansen_gray_2mm.nii.gz
-atlases/<nt_id>_alves_wm_2mm.nii.gz
-node/nt_roi_156.csv
-node/nt_node_damage.csv
-edge/nt_edge_lqt.csv
-impact/nt_impact_scores.csv
+selection_summary.csv
+selection_folds.csv
+profile_scores.csv
 models/model_prediction_performance.csv
 models/model_prediction_pairwise_bootstrap.csv
 ```
 
-`edge/nt_edge_lqt.csv` is computed as:
+For each outer fold, the integrated profiles are:
 
 ```text
-edge_nt_damage[i,e] = sum_v lesion_i(v) * edge_tract_mask_e(v) * Alves_NT_WM(v)
+profiles/fold_XX_ntdc_hansen_profile.nii.gz
+profiles/fold_XX_ntdc_alves_profile.nii.gz
 ```
 
 The shared tract mask matrix is stored at:
@@ -102,22 +143,29 @@ Clinical + NTDC
 Clinical + SDC + NTDC
 ```
 
-`SDC` is the lesion-only structural damage contribution. `NTDC` is the
-neurotransmitter damage contribution after combining node and edge impact
-scores.
+`SDC` is the lesion-only structural damage contribution. `NTDC` is computed
+after training-fold neurotransmitter screening, voxel-profile integration, and
+training-fold node/edge LSM weighting. Both scores use training-fold mean and
+standard deviation for z-standardization before being applied to the held-out
+fold.
 
-`scripts/run_ml_ntdc_analysis.py` performs nested elastic-net screening across
-the 13 neurotransmitter-specific NTDC scores and writes a single `ML-NTDC`
-score. Its final model set is:
+The LSM maps are spatial projections of fold-specific high-dimensional weights.
+The node map assigns the trained ROI weight back to all voxels in that ROI. The
+edge map projects selected edge weights back to voxels crossed by those
+ROI-to-ROI streamlines. These files show where the NTDC model placed spatial
+weight; they are not whole-cohort voxelwise significance maps.
+
+The fixed D1/D2/DAT exploratory branch uses an equal-weight dopamine profile
+and writes separate out-of-sample prediction files under:
 
 ```text
-Clinical
-Clinical + SDC
-Clinical + ML-NTDC
-Clinical + SDC + ML-NTDC
+derivatives/ml_profile/exploratory_profiles/
+dopamine_d1_d2_dat_scores.csv
+dopamine_d1_d2_dat_model_prediction_performance.csv
+dopamine_d1_d2_dat_model_prediction_pairwise_bootstrap.csv
 ```
 
 `scripts/compute_impact_scores.py` contains the reusable impact-score and
-prediction functions. It is imported by `run_multi_nt_analysis.py`.
+prediction functions. It is imported by `run_ml_profile_analysis.py`.
 
 Large imaging data, LQT resources, and derivatives are excluded from git.

@@ -215,7 +215,7 @@ def download_reference_maps(config: dict, force: bool = False) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download DAT pilot reference data.")
+    parser = argparse.ArgumentParser(description="Download NT-CLSM reference data.")
     parser.add_argument("--config", default="config/dat_config.yaml")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--maps", action="store_true")

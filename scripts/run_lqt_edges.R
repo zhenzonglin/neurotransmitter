@@ -16,7 +16,12 @@ if (!requireNamespace("yaml", quietly = TRUE)) {
   stop("yaml is required. Run scripts/install_lqt_r_deps.R first.")
 }
 config <- yaml::read_yaml(config_path)
-project_dir <- normalizePath(config$project_dir, mustWork = TRUE)
+raw_project_dir <- config$project_dir
+if (!grepl("^/", raw_project_dir)) {
+  project_dir <- normalizePath(file.path(project_guess, raw_project_dir), mustWork = TRUE)
+} else {
+  project_dir <- normalizePath(raw_project_dir, mustWork = TRUE)
+}
 lib_dir <- file.path(project_dir, "external", "r_libs")
 limit <- NA_integer_
 if ("--limit" %in% args) {

@@ -141,12 +141,13 @@ def impact_from_weights(features: pd.DataFrame, weights: pd.DataFrame) -> pd.Ser
     return pd.Series(matrix @ weight / denom, index=features.index)
 
 
-def zscore(values: pd.Series) -> pd.Series:
-    """Return a stable z score."""
-    sd = values.std(skipna=True)
+def train_z_apply(train_values: pd.Series, test_values: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """Apply train-set z score to train and test series."""
+    mean = float(train_values.mean(skipna=True))
+    sd = float(train_values.std(skipna=True))
     if not np.isfinite(sd) or sd <= np.finfo(float).eps:
-        return values * np.nan
-    return (values - values.mean(skipna=True)) / sd
+        sd = 1.0
+    return (train_values - mean) / sd, (test_values - mean) / sd
 
 
 def add_cv_group(config: dict, data: pd.DataFrame) -> pd.DataFrame:
@@ -206,6 +207,8 @@ def run_cross_validated_impact(
     scores["lesion_edge_impact"] = np.nan
     scores["nt_node_impact"] = np.nan
     scores["nt_edge_impact"] = np.nan
+    scores["sdc"] = np.nan
+    scores["ntdc"] = np.nan
     fold_rows = []
     gkf = GroupKFold(n_splits=n_splits)
 
@@ -231,22 +234,35 @@ def run_cross_validated_impact(
         node_weights = select_weights(node_stats, stat_name, node_top_k, q_threshold, use_q)
         edge_weights = select_weights(edge_stats, stat_name, edge_top_k, q_threshold, use_q)
 
-        lesion_node_impact = impact_from_weights(test_lesion_node, lesion_node_weights)
-        lesion_edge_impact = impact_from_weights(test_lesion_edge, lesion_edge_weights)
-        node_impact = impact_from_weights(test_node, node_weights)
-        edge_impact = impact_from_weights(test_edge, edge_weights)
+        train_lesion_node_impact = impact_from_weights(train_lesion_node.reset_index(drop=True), lesion_node_weights)
+        test_lesion_node_impact = impact_from_weights(test_lesion_node, lesion_node_weights)
+        train_lesion_edge_impact = impact_from_weights(train_lesion_edge.reset_index(drop=True), lesion_edge_weights)
+        test_lesion_edge_impact = impact_from_weights(test_lesion_edge, lesion_edge_weights)
+        train_node_impact = impact_from_weights(train_node.reset_index(drop=True), node_weights)
+        test_node_impact = impact_from_weights(test_node, node_weights)
+        train_edge_impact = impact_from_weights(train_edge.reset_index(drop=True), edge_weights)
+        test_edge_impact = impact_from_weights(test_edge, edge_weights)
+
+        # 仅使用训练折分布标准化测试折评分
+        _, test_lesion_node_z = train_z_apply(train_lesion_node_impact, test_lesion_node_impact)
+        _, test_lesion_edge_z = train_z_apply(train_lesion_edge_impact, test_lesion_edge_impact)
+        _, test_node_z = train_z_apply(train_node_impact, test_node_impact)
+        _, test_edge_z = train_z_apply(train_edge_impact, test_edge_impact)
+
         test_frame = pd.DataFrame(
             {
                 "subject_id": test_node["subject_id"],
                 "fold": fold_id,
-                "lesion_node_impact": lesion_node_impact.to_numpy(),
-                "lesion_edge_impact": lesion_edge_impact.to_numpy(),
-                "nt_node_impact": node_impact.to_numpy(),
-                "nt_edge_impact": edge_impact.to_numpy(),
+                "lesion_node_impact": test_lesion_node_impact.to_numpy(),
+                "lesion_edge_impact": test_lesion_edge_impact.to_numpy(),
+                "nt_node_impact": test_node_impact.to_numpy(),
+                "nt_edge_impact": test_edge_impact.to_numpy(),
+                "sdc": test_lesion_node_z.to_numpy() + test_lesion_edge_z.to_numpy(),
+                "ntdc": test_node_z.to_numpy() + test_edge_z.to_numpy(),
             }
         )
         scores = scores.merge(test_frame, on="subject_id", how="left", suffixes=("", "_new"))
-        for col in ["fold", "lesion_node_impact", "lesion_edge_impact", "nt_node_impact", "nt_edge_impact"]:
+        for col in ["fold", "lesion_node_impact", "lesion_edge_impact", "nt_node_impact", "nt_edge_impact", "sdc", "ntdc"]:
             scores[col] = scores[f"{col}_new"].combine_first(scores[col])
             scores = scores.drop(columns=[f"{col}_new"])
 
@@ -267,8 +283,6 @@ def run_cross_validated_impact(
             }
         )
 
-    scores["sdc"] = zscore(scores["lesion_node_impact"]) + zscore(scores["lesion_edge_impact"])
-    scores["ntdc"] = zscore(scores["nt_node_impact"]) + zscore(scores["nt_edge_impact"])
     scores["dataset"] = dataset_name
     write_csv(scores, out_dir / "nt_impact_scores.csv")
     write_csv(scores[["subject_id", "fold", "lesion_node_impact", "lesion_edge_impact", "sdc", "dataset"]], out_dir / "lesion_impact_scores.csv")

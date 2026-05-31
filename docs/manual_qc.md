@@ -16,8 +16,7 @@ python scripts/prepare_inputs.py --config "${config_path}"
 Rscript scripts/install_lqt_r_deps.R --project-dir /home/zhenzong2/analysis/neurotransmitter
 Rscript scripts/run_lqt_edges.R --config "${config_path}"
 python scripts/build_edge_tract_matrix.py --config "${config_path}"
-python scripts/run_multi_nt_analysis.py --config "${config_path}"
-python scripts/run_ml_ntdc_analysis.py --config "${config_path}"
+python scripts/run_ml_profile_analysis.py --config "${config_path}"
 python scripts/generate_html_report.py --config "${config_path}"
 ```
 
@@ -32,14 +31,14 @@ flowchart TD
     E --> F["derivatives/shared/lqt_edge_disconnection.csv"]
     E --> K["build_edge_tract_matrix.py"]
     K --> L["derivatives/shared/edge_tract_voxels_2mm.npz"]
-    C --> G["run_multi_nt_analysis.py"]
+    C --> G["run_ml_profile_analysis.py"]
     F --> G
     L --> G
     H["Hansen + Alves maps"] --> G
-    G --> I["derivatives/nt/<nt_id>"]
-    G --> J["derivatives/nt/summary"]
-    J --> M["run_ml_ntdc_analysis.py"]
-    M --> N["derivatives/nt_ml/ml_ntdc"]
+    G --> I["training-fold NT screening"]
+    I --> J["fold-specific voxel profiles"]
+    J --> M["node/edge LSM and prediction"]
+    M --> N["derivatives/ml_profile"]
 ```
 
 ## 3. QC Tables
@@ -121,44 +120,63 @@ print(values.to_numpy().sum())
 PY
 ```
 
-## 6. Multi-NT Result QC
+## 6. NTDC Result QC
 
-Summary files:
+Main files:
 
 ```text
-derivatives/nt/summary/nt_run_manifest.csv
-derivatives/nt/summary/nt_run_report.md
-derivatives/nt/summary/nt_prediction_performance.csv
-derivatives/nt/summary/nt_prediction_vs_clinical_bootstrap.csv
+derivatives/ml_profile/fold_manifest.csv
+derivatives/ml_profile/selection_summary.csv
+derivatives/ml_profile/selection_folds.csv
+derivatives/ml_profile/profile_scores.csv
+derivatives/ml_profile/ml_profile_run_report.md
 ```
 
-Per-system folders:
+Fold-specific integrated maps:
 
 ```text
-derivatives/nt/<nt_id>/atlases/
-derivatives/nt/<nt_id>/node/
-derivatives/nt/<nt_id>/edge/
-derivatives/nt/<nt_id>/impact/
-derivatives/nt/<nt_id>/models/
+derivatives/ml_profile/profiles/fold_XX_ntdc_hansen_profile.nii.gz
+derivatives/ml_profile/profiles/fold_XX_ntdc_alves_profile.nii.gz
 ```
 
-Each configured `nt_id` should have:
-
-- `node/nt_roi_156.csv`: Hansen gray-matter ROI mean.
-- `node/nt_node_damage.csv`: lesion node load weighted by Hansen ROI value.
-- `edge/nt_edge_lqt.csv`: lesion voxels on each edge tract weighted by Alves WM map values.
-- `impact/nt_impact_scores.csv`: 10-fold out-of-fold lesion and NT impact scores.
-- `models/model_prediction_performance.csv`: 10-fold out-of-sample prediction metrics.
-- `models/model_prediction_pairwise_bootstrap.csv`: paired bootstrap model comparisons.
-- Prediction models are `Clinical`, `Clinical + SDC`, `Clinical + NTDC`, and `Clinical + SDC + NTDC`.
-
-ML-selected NTDC results:
+LSM projection maps:
 
 ```text
-derivatives/nt_ml/ml_ntdc/ml_ntdc_scores.csv
-derivatives/nt_ml/ml_ntdc/ml_ntdc_selection_summary.csv
-derivatives/nt_ml/ml_ntdc/models/model_prediction_performance.csv
-derivatives/nt_ml/ml_ntdc/models/model_prediction_pairwise_bootstrap.csv
+derivatives/ml_profile/lsm_maps/fold_XX_ntdc_node_lsm_weight_map.nii.gz
+derivatives/ml_profile/lsm_maps/fold_XX_ntdc_edge_lsm_projection_map.nii.gz
+derivatives/ml_profile/lsm_maps/ntdc_node_lsm_weight_mean_map.nii.gz
+derivatives/ml_profile/lsm_maps/ntdc_edge_lsm_projection_mean_map.nii.gz
+derivatives/ml_profile/lsm_maps/ntdc_node_lsm_weight_selection_frequency_map.nii.gz
+derivatives/ml_profile/lsm_maps/ntdc_edge_lsm_projection_selection_frequency_map.nii.gz
+```
+
+Interpretation:
+
+- Node LSM maps are ROI-level training-fold weights projected back to the
+  4S156 atlas space.
+- Edge LSM maps are selected edge weights projected back to voxels crossed by
+  the corresponding ROI-to-ROI tract masks.
+- Mean maps summarize signed weight direction across folds.
+- Selection-frequency maps summarize fold stability.
+- These maps visualize model weight localization. They are not voxelwise
+  corrected p-value maps.
+
+Exploratory fixed dopamine profile:
+
+```text
+derivatives/ml_profile/exploratory_profiles/dopamine_d1_d2_dat_hansen_profile.nii.gz
+derivatives/ml_profile/exploratory_profiles/dopamine_d1_d2_dat_alves_profile.nii.gz
+derivatives/ml_profile/exploratory_profiles/dopamine_d1_d2_dat_scores.csv
+derivatives/ml_profile/exploratory_profiles/dopamine_d1_d2_dat_model_prediction_performance.csv
+derivatives/ml_profile/exploratory_profiles/dopamine_d1_d2_dat_model_prediction_pairwise_bootstrap.csv
+```
+
+Prediction model files:
+
+```text
+derivatives/ml_profile/models/model_prediction_cv.csv
+derivatives/ml_profile/models/model_prediction_performance.csv
+derivatives/ml_profile/models/model_prediction_pairwise_bootstrap.csv
 ```
 
 Flow report:
@@ -175,20 +193,17 @@ python - <<'PY'
 from pathlib import Path
 import pandas as pd
 root = Path("/home/zhenzong2/analysis/neurotransmitter")
-summary = root / "derivatives/nt/summary"
-perf = pd.read_csv(summary / "nt_prediction_performance.csv")
-boot = pd.read_csv(summary / "nt_prediction_vs_clinical_bootstrap.csv")
-print(perf.groupby("nt_id")["model"].nunique())
-print(perf[["nt_id", "model", "ordinal_log_loss", "ranked_probability_score", "ordinal_c_index", "binary_auc_mrs_le_threshold"]])
-print(boot[["nt_id", "model_b", "metric", "delta_b_minus_a", "ci_low", "ci_high", "p_fdr_bh"]])
-for nt_dir in sorted((root / "derivatives/nt").iterdir()):
-    if not nt_dir.is_dir() or nt_dir.name == "summary":
-        continue
-    roi = pd.read_csv(nt_dir / "node/nt_roi_156.csv")
-    node = pd.read_csv(nt_dir / "node/nt_node_damage.csv")
-    edge = pd.read_csv(nt_dir / "edge/nt_edge_lqt.csv")
-    impact = pd.read_csv(nt_dir / "impact/nt_impact_scores.csv")
-    print(nt_dir.name, roi.shape, node.shape, edge.shape, impact.shape)
+ml = root / "derivatives/ml_profile"
+selection = pd.read_csv(ml / "selection_summary.csv")
+folds = pd.read_csv(ml / "fold_manifest.csv")
+scores = pd.read_csv(ml / "profile_scores.csv")
+perf = pd.read_csv(ml / "models/model_prediction_performance.csv")
+boot = pd.read_csv(ml / "models/model_prediction_pairwise_bootstrap.csv")
+print(selection)
+print(folds[["fold", "n_train", "n_test", "selected_count", "selected_nt"]])
+print(scores.shape)
+print(perf[["model", "ordinal_log_loss", "ranked_probability_score", "ordinal_c_index", "binary_auc_mrs_le_threshold"]])
+print(boot[["model_a", "model_b", "metric", "delta_b_minus_a", "ci_low", "ci_high", "p_fdr_bh"]])
 PY
 ```
 

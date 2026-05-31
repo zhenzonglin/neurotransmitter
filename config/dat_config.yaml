@@ -1,4 +1,4 @@
-project_dir: /home/zhenzong2/analysis/neurotransmitter
+project_dir: .
 inputs:
   lesion_glob: lesion/*.nii*
   phenotype_file: phenotype.xlsx
@@ -19,9 +19,6 @@ inputs:
 analysis:
   outcome: mrs_3m
   cv_group_column: subject_id
-  sdc_predictor: sdc
-  ntdc_predictor: ntdc
-  ntdc_label: NTDC
   model_covariates:
   - age
   - sex
@@ -42,7 +39,7 @@ impact:
   edge_top_k: 200
   use_q_if_available: true
   prediction_bootstrap: 1000
-ml_ntdc:
+ml_profile:
   inner_splits: 5
   l1_ratios:
   - 0.1
@@ -149,5 +146,5 @@ outputs:
   qc_dir: derivatives/qc
   node_dir: derivatives/shared
   edge_dir: derivatives/shared
-  model_dir: derivatives/nt/summary
-  impact_dir: derivatives/nt/summary
+  model_dir: derivatives/ml_profile/models
+  impact_dir: derivatives/ml_profile

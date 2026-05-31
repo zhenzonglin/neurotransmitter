@@ -1,6 +1,7 @@
-lesion/
+lesion/*
+!lesion/.gitkeep
 phenotype.xlsx
-atlases/
+atlases/*
 !atlases/.gitkeep
 atlases/**/*.nii
 atlases/**/*.nii.gz
@@ -16,6 +17,7 @@ external/lqt_data/
 external/r_libs/
 external/lqt/
 derivatives/
+transfer_packages/
 *.Zone.Identifier
 **/*:Zone.Identifier
 __pycache__/

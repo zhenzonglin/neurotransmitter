@@ -12,6 +12,8 @@ def load_config(path: str | Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
     project_dir = Path(config["project_dir"]).expanduser()
+    if not project_dir.is_absolute():
+        project_dir = (path.resolve().parents[1] / project_dir).resolve()
     config["project_dir"] = str(project_dir)
     return config
 
