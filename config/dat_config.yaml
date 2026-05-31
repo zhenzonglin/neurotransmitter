@@ -19,6 +19,10 @@ inputs:
 qc:
   exclude_empty_lesion: true
   min_lesion_volume_ml: 0.0
+  exclude_m3_stroke: true
+  m3_stroke_column: m3_stroke
+  m3_stroke_exclude_values:
+  - 2
 analysis:
   outcome: mrs_3m
   cv_group_column: subject_id

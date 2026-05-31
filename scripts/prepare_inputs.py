@@ -18,6 +18,15 @@ from nt_analysis.images import lesion_volume_ml, resample_like
 from nt_analysis.tables import write_csv
 
 
+def normalize_qc_value(value: object) -> str:
+    """Normalize QC values for matching."""
+    if pd.isna(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
 def load_phenotype(config: dict) -> pd.DataFrame:
     """Load and normalize phenotype data."""
     path = project_path(config, config["inputs"]["phenotype_file"])
@@ -29,7 +38,12 @@ def load_phenotype(config: dict) -> pd.DataFrame:
     rename = {source: target for target, source in covariate_map.items()}
     rename[config["inputs"]["outcome_column"]] = outcome
     df = df.rename(columns=rename)
-    keep = ["subject_id", outcome, *covariate_map.keys()]
+    qc_cfg = config.get("qc", {})
+    qc_cols = []
+    if qc_cfg.get("exclude_m3_stroke", False):
+        qc_cols.append(qc_cfg.get("m3_stroke_column", "m3_stroke"))
+
+    keep = ["subject_id", outcome, *covariate_map.keys(), *qc_cols]
     out = df[[column for column in keep if column in df.columns]].copy()
     for column, mapping in config["inputs"].get("categorical_maps", {}).items():
         if column in out.columns:
@@ -140,14 +154,29 @@ def main() -> None:
         raise RuntimeError("no lesion masks passed lesion QC")
     phenotype = load_phenotype(config)
     analysis_manifest = merge_manifest_phenotype(active_manifest, phenotype)
+    qc_cfg = config.get("qc", {})
+    if qc_cfg.get("exclude_m3_stroke", False):
+        column = qc_cfg.get("m3_stroke_column", "m3_stroke")
+        exclude_values = {normalize_qc_value(value) for value in qc_cfg.get("m3_stroke_exclude_values", [2])}
+
+        if column not in analysis_manifest.columns:
+            raise KeyError(f"missing m3 stroke column: {column}")
+
+        analysis_manifest["excluded_m3_stroke"] = analysis_manifest[column].map(normalize_qc_value).isin(exclude_values)
+    else:
+        analysis_manifest["excluded_m3_stroke"] = False
+    analysis_manifest["included_by_phenotype_qc"] = ~analysis_manifest["excluded_m3_stroke"]
     qc_dir = project_path(config, config["outputs"]["qc_dir"])
+    pre_exclusion_manifest = analysis_manifest.copy()
+    analysis_manifest = analysis_manifest.loc[~analysis_manifest["excluded_m3_stroke"]].copy()
     write_csv(lesion_qc, qc_dir / "lesion_qc.csv")
+    write_csv(pre_exclusion_manifest, qc_dir / "phenotype_merge_qc.csv")
     write_csv(analysis_manifest, qc_dir / "subject_manifest.csv")
 
     outcome = outcome_column(config)
     covariates = analysis_covariates(config, "model_covariates")
     keep = ["subject_id", "lesion_path", outcome, *covariates]
-    write_csv(analysis_manifest[[column for column in keep if column in analysis_manifest.columns]], qc_dir / "phenotype_merge_qc.csv")
+    write_csv(analysis_manifest[[column for column in keep if column in analysis_manifest.columns]], qc_dir / "analysis_input_qc.csv")
 
     reference_2mm = Path(active_manifest.iloc[0]["lesion_path"])
     prepare_reference_images(config, reference_2mm)
