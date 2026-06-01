@@ -29,6 +29,15 @@ if ("--limit" %in% args) {
 } else if (!is.null(config$lqt$max_subjects)) {
   limit <- as.integer(config$lqt$max_subjects)
 }
+jobs <- 1L
+if ("--jobs" %in% args) {
+  jobs <- as.integer(args[which(args == "--jobs") + 1])
+} else if (!is.null(config$lqt$jobs)) {
+  jobs <- as.integer(config$lqt$jobs)
+}
+if (is.na(jobs) || jobs < 1L) {
+  jobs <- 1L
+}
 force <- "--force" %in% args
 
 .libPaths(c(lib_dir, .libPaths()))
@@ -163,7 +172,7 @@ for (i in seq_len(roi_count - 1)) {
 }
 
 raw_rows <- list()
-for (row_index in seq_len(nrow(manifest))) {
+process_subject <- function(row_index) {
   subject_id <- manifest$subject_id[row_index]
   lesion_path <- manifest$lesion_path[row_index]
   cache_id <- subject_id
@@ -198,8 +207,24 @@ for (row_index in seq_len(nrow(manifest))) {
       edge_index <- edge_index + 1
     }
   }
-  raw_rows[[row_index]] <- raw_values
   cat(sprintf("finished %s (%d/%d)\n", subject_id, row_index, nrow(manifest)))
+  raw_values
+}
+
+jobs <- min(jobs, nrow(manifest))
+if (jobs > 1L) {
+  if (.Platform$OS.type == "windows") {
+    stop("--jobs > 1 requires Linux or WSL")
+  }
+  cat(sprintf("running LQT subjects with %d parallel jobs\n", jobs))
+  # 每个作业调用一个DSI Studio容器
+  raw_rows <- parallel::mclapply(seq_len(nrow(manifest)), process_subject, mc.cores = jobs)
+  failed <- vapply(raw_rows, inherits, logical(1), what = "try-error")
+  if (any(failed)) {
+    stop(paste("LQT subject jobs failed:", paste(which(failed), collapse = ", ")))
+  }
+} else {
+  raw_rows <- lapply(seq_len(nrow(manifest)), process_subject)
 }
 
 raw_df <- as.data.frame(do.call(rbind, raw_rows), stringsAsFactors = FALSE)
