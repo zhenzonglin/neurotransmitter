@@ -621,6 +621,49 @@ def write_run_report(out_dir: Path, selection_summary: pd.DataFrame, performance
     (out_dir / "ml_profile_run_report.md").write_text("\n".join(lines), encoding="utf-8")
 
 
+def apply_subgroup_filters(data: pd.DataFrame, args: argparse.Namespace, out_dir: Path) -> pd.DataFrame:
+    """Apply predefined subgroup filters."""
+    # 亚组只用于预定义敏感性分析，主分析请保留全队列
+    filters = [
+        ("lesion_volume_ml", ">=", args.lesion_volume_min),
+        ("lesion_volume_ml", "<=", args.lesion_volume_max),
+        ("nihss", ">=", args.nihss_min),
+        ("nihss", "<=", args.nihss_max),
+    ]
+    active = [(column, op, value) for column, op, value in filters if value is not None]
+    if not active:
+        return data
+
+    mask = pd.Series(True, index=data.index)
+    rows = []
+    n_before = int(data.shape[0])
+    for column, op, value in active:
+        if column not in data.columns:
+            raise KeyError(f"missing subgroup column: {column}")
+        numeric = pd.to_numeric(data[column], errors="coerce")
+        current = numeric >= float(value) if op == ">=" else numeric <= float(value)
+        mask &= current.fillna(False)
+        rows.append({"column": column, "operator": op, "value": float(value)})
+
+    filtered = data.loc[mask].copy()
+    if filtered.empty:
+        raise RuntimeError("no subjects remained after subgroup filtering")
+
+    summary = pd.DataFrame(
+        rows
+        + [
+            {"column": "n_before", "operator": "=", "value": n_before},
+            {"column": "n_after", "operator": "=", "value": int(filtered.shape[0])},
+            {"column": "subgroup_label", "operator": "=", "value": args.subgroup_label or args.output_subdir},
+        ]
+    )
+    write_csv(summary, out_dir / "subgroup_filter_manifest.csv")
+    subject_cols = [column for column in ["subject_id", "lesion_volume_ml", "nihss"] if column in filtered.columns]
+    write_csv(filtered[subject_cols], out_dir / "subgroup_subjects.csv")
+    print(f"subgroup subjects {filtered.shape[0]}/{n_before}", flush=True)
+    return filtered
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Run fold-specific NTDC prediction.")
@@ -629,6 +672,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force-screening", action="store_true")
     parser.add_argument("--max-subjects", type=int, default=None)
     parser.add_argument("--output-subdir", default="ml_profile")
+    parser.add_argument("--lesion-volume-min", type=float, default=None)
+    parser.add_argument("--lesion-volume-max", type=float, default=None)
+    parser.add_argument("--nihss-min", type=float, default=None)
+    parser.add_argument("--nihss-max", type=float, default=None)
+    parser.add_argument("--subgroup-label", default="")
     return parser.parse_args()
 
 
@@ -645,6 +693,7 @@ def main() -> None:
     covariates = analysis_covariates(config, "model_covariates")
     required = ["subject_id", "cv_group", "lesion_path", outcome, *covariates]
     data = manifest.dropna(subset=[column for column in required if column in manifest.columns]).copy()
+    data = apply_subgroup_filters(data, args, out_dir)
     if args.max_subjects is not None:
         data = data.head(int(args.max_subjects)).copy()
     data[outcome] = data[outcome].astype(int)

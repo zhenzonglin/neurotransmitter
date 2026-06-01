@@ -209,20 +209,22 @@ def plot_pairwise(pairwise: pd.DataFrame, output: Path) -> None:
     save_figure(fig, output)
 
 
-def build_file_index(project_dir: Path) -> pd.DataFrame:
+def build_file_index(project_dir: Path, profile_subdir: str = "ml_profile", report_subdir: str = "reports") -> pd.DataFrame:
     """生成文件索引。"""
+    profile_dir = f"derivatives/{profile_subdir}"
+    report_dir = f"derivatives/{report_subdir}"
     patterns = [
         "derivatives/qc/*.csv",
         "derivatives/shared/*.csv",
-        "derivatives/ml_profile/*.csv",
-        "derivatives/ml_profile/models/*.csv",
-        "derivatives/ml_profile/profiles/*.nii.gz",
-        "derivatives/ml_profile/lsm_maps/*.nii.gz",
-        "derivatives/ml_profile/exploratory_profiles/*.csv",
-        "derivatives/ml_profile/exploratory_profiles/*.nii.gz",
-        "derivatives/reports/*.html",
-        "derivatives/reports/*.csv",
-        "derivatives/reports/figures/*.png",
+        f"{profile_dir}/*.csv",
+        f"{profile_dir}/models/*.csv",
+        f"{profile_dir}/profiles/*.nii.gz",
+        f"{profile_dir}/lsm_maps/*.nii.gz",
+        f"{profile_dir}/exploratory_profiles/*.csv",
+        f"{profile_dir}/exploratory_profiles/*.nii.gz",
+        f"{report_dir}/*.html",
+        f"{report_dir}/*.csv",
+        f"{report_dir}/figures/*.png",
     ]
     rows = []
     for pattern in patterns:
@@ -346,6 +348,8 @@ def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
     parser = argparse.ArgumentParser(description="Generate NTDC flow HTML report.")
     parser.add_argument("--config", default="config/dat_config.yaml")
+    parser.add_argument("--profile-subdir", default="ml_profile")
+    parser.add_argument("--report-subdir", default="reports")
     return parser.parse_args()
 
 
@@ -354,9 +358,9 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
     project_dir = Path(config["project_dir"])
-    report_dir = ensure_dir(project_path(config, "derivatives", "reports"))
+    report_dir = ensure_dir(project_path(config, "derivatives", args.report_subdir))
     figure_dir = ensure_dir(report_dir / "figures")
-    ml_dir = project_path(config, "derivatives", "ml_profile")
+    ml_dir = project_path(config, "derivatives", args.profile_subdir)
 
     manifest = read_table(project_path(config, "derivatives", "qc", "subject_manifest.csv"))
     lesion_qc = read_table(project_path(config, "derivatives", "qc", "lesion_qc.csv"))
@@ -389,7 +393,7 @@ def main() -> None:
     qc_summary = build_qc_summary(config, manifest, lesion_qc, phenotype_qc)
     qc_summary_path = report_dir / "lesion_qc_summary.csv"
     qc_summary.to_csv(qc_summary_path, index=False)
-    file_index = build_file_index(project_dir)
+    file_index = build_file_index(project_dir, args.profile_subdir, args.report_subdir)
     file_index_path = report_dir / "report_file_index.csv"
     file_index.to_csv(file_index_path, index=False)
     figures = {key: path.relative_to(report_dir).as_posix() for key, path in figure_paths.items()}
