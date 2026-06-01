@@ -357,7 +357,11 @@ def compute_profile_edge_damage(
 
 def align_by_subject(df: pd.DataFrame, subject_ids: list[str]) -> pd.DataFrame:
     """Order a table by subject ID."""
-    return df.set_index("subject_id").loc[subject_ids].reset_index()
+    # 纯数字ID读表后可能变成整数，统一按字符串对齐
+    out = df.copy()
+    out["subject_id"] = out["subject_id"].astype(str)
+    ids = [str(subject_id) for subject_id in subject_ids]
+    return out.set_index("subject_id").loc[ids].reset_index()
 
 
 def train_z_apply(train_values: pd.Series, test_values: pd.Series) -> tuple[pd.Series, pd.Series]:
@@ -635,7 +639,7 @@ def main() -> None:
     out_dir = ensure_dir(project_path(config, "derivatives", args.output_subdir))
     model_dir = ensure_dir(out_dir / "models")
     specs = neurotransmitter_specs(config)
-    manifest = pd.read_csv(project_path(config, config["outputs"]["qc_dir"], "subject_manifest.csv"))
+    manifest = pd.read_csv(project_path(config, config["outputs"]["qc_dir"], "subject_manifest.csv"), dtype={"subject_id": str})
     manifest = add_cv_group(config, manifest)
     outcome = outcome_column(config)
     covariates = analysis_covariates(config, "model_covariates")

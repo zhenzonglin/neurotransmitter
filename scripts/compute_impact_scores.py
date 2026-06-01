@@ -19,8 +19,18 @@ from nt_analysis.config import analysis_covariates, analysis_table, ensure_dir, 
 from nt_analysis.tables import write_csv
 
 
+def stringify_subject_id(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert subject IDs to strings."""
+    # 纯数字ID读表后可能变成整数，统一按字符串处理
+    out = df.copy()
+    if "subject_id" in out.columns:
+        out["subject_id"] = out["subject_id"].astype(str)
+    return out
+
+
 def compute_lesion_node_load(config: dict, phenotype: pd.DataFrame) -> pd.DataFrame:
     """Compute lesion-only node load features."""
+    phenotype = stringify_subject_id(phenotype)
     node_dir = ensure_dir(project_path(config, config["outputs"]["node_dir"]))
     output = node_dir / "lesion_node_load.csv"
     atlas_img = nib.load(str(project_path(config, config["atlases"]["outputs"]["atlas4s156_2mm"])))
@@ -38,7 +48,7 @@ def compute_lesion_node_load(config: dict, phenotype: pd.DataFrame) -> pd.DataFr
                 mask = atlas == roi
                 values[f"node_{roi:03d}"] = float(np.sum(lesion & mask) / max(mask.sum(), 1))
             path_cache[lesion_path] = values
-        rows.append({"subject_id": row.subject_id, **path_cache[lesion_path]})
+        rows.append({"subject_id": str(row.subject_id), **path_cache[lesion_path]})
     lesion_node = pd.DataFrame(rows)
     write_csv(lesion_node, output)
     return lesion_node
@@ -48,8 +58,8 @@ def load_lesion_feature_tables(config: dict, phenotype: pd.DataFrame) -> tuple[p
     """Load lesion-only node and edge features."""
     lesion_node = compute_lesion_node_load(config, phenotype)
     edge_path = project_path(config, config["outputs"]["edge_dir"], analysis_table(config, "lqt_edge_disconnection", "lqt_edge_disconnection.csv"))
-    lesion_edge = pd.read_csv(edge_path)
-    return lesion_node, lesion_edge
+    lesion_edge = pd.read_csv(edge_path, dtype={"subject_id": str})
+    return lesion_node, stringify_subject_id(lesion_edge)
 
 
 def residualize(values: np.ndarray, design: np.ndarray) -> np.ndarray:
@@ -65,6 +75,8 @@ def fit_fast_mass_univariate(
     covariates: list[str],
 ) -> pd.DataFrame:
     """Fit adjusted OLS for many features using vectorized residualization."""
+    features = stringify_subject_id(features)
+    phenotype = stringify_subject_id(phenotype)
     feature_cols = [col for col in features.columns if col.startswith("node_") or col.startswith("edge_")]
     require_columns(["subject_id", outcome, *covariates], list(phenotype.columns), "phenotype")
     merged = phenotype[["subject_id", outcome, *covariates]].merge(features, on="subject_id")
