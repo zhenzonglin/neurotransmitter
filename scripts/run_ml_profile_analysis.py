@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import nibabel as nib
@@ -597,6 +599,136 @@ def summarize_predictions(config: dict, predictions: pd.DataFrame, out_dir: Path
     write_csv(pairwise, out_dir / f"{file_prefix}model_prediction_pairwise_bootstrap.csv")
 
 
+fold_context: dict[str, object] = {}
+
+
+def run_fold_job(job: tuple[int, list[int], list[int]]) -> dict[str, object]:
+    """Run one outer CV fold."""
+    # 多进程时通过fork共享只读大对象，避免反复传递矩阵
+    fold, train_idx, test_idx = job
+    config = fold_context["config"]
+    data = fold_context["data"]
+    nt_ids = fold_context["nt_ids"]
+    covariates = fold_context["covariates"]
+    outcome = fold_context["outcome"]
+    feature_cols = fold_context["feature_cols"]
+    gray_arrays = fold_context["gray_arrays"]
+    wm_arrays = fold_context["wm_arrays"]
+    ref_img = fold_context["ref_img"]
+    out_dir = fold_context["out_dir"]
+    lesion_indices = fold_context["lesion_indices"]
+    atlas_flat = fold_context["atlas_flat"]
+    labels = fold_context["labels"]
+    roi_counts = fold_context["roi_counts"]
+    edge_matrix = fold_context["edge_matrix"]
+    edge_names = fold_context["edge_names"]
+    lesion_node = fold_context["lesion_node"]
+    lesion_edge = fold_context["lesion_edge"]
+    labels_outcome = fold_context["labels_outcome"]
+    threshold = fold_context["threshold"]
+    dopamine_profile = fold_context["dopamine_profile"]
+
+    train = data.iloc[train_idx].copy()
+    test = data.iloc[test_idx].copy()
+    train_ids = train["subject_id"].astype(str).tolist()
+    test_ids = test["subject_id"].astype(str).tolist()
+    feature_table, beta_table, meta = elastic_net_nt_weights(train, feature_cols, nt_ids, covariates, outcome, train["cv_group"].astype(str).to_numpy(), config)
+    weights = beta_table.set_index("nt_id").reindex(nt_ids)["profile_weight"].fillna(0.0).to_numpy(dtype=np.float32)
+    gray_profile, wm_profile = save_profile_images(weights, gray_arrays, wm_arrays, ref_img, out_dir, fold)
+
+    profile_node_train = compute_profile_node_damage(train_ids, lesion_indices, atlas_flat, labels, roi_counts, gray_profile)
+    profile_node_test = compute_profile_node_damage(test_ids, lesion_indices, atlas_flat, labels, roi_counts, gray_profile)
+    profile_edge_train = compute_profile_edge_damage(train_ids, lesion_indices, edge_matrix, edge_names, wm_profile)
+    profile_edge_test = compute_profile_edge_damage(test_ids, lesion_indices, edge_matrix, edge_names, wm_profile)
+    train_scores, test_scores, selected_counts = compute_fold_scores(
+        config,
+        fold,
+        data,
+        train_ids,
+        test_ids,
+        lesion_node,
+        lesion_edge,
+        profile_node_train,
+        profile_node_test,
+        profile_edge_train,
+        profile_edge_test,
+        out_dir,
+        atlas_flat,
+        labels,
+        ref_img,
+        edge_matrix,
+        edge_names,
+    )
+    fold_pred, fold_status = predict_fold(train_scores, test_scores, labels_outcome, threshold, covariates, outcome)
+
+    dopamine_score = None
+    dopamine_pred = []
+    dopamine_status = []
+    dopamine_fold_row = None
+    if dopamine_profile is not None:
+        dopamine_gray, dopamine_wm = dopamine_profile
+        dopamine_node_train = compute_profile_node_damage(train_ids, lesion_indices, atlas_flat, labels, roi_counts, dopamine_gray)
+        dopamine_node_test = compute_profile_node_damage(test_ids, lesion_indices, atlas_flat, labels, roi_counts, dopamine_gray)
+        dopamine_edge_train = compute_profile_edge_damage(train_ids, lesion_indices, edge_matrix, edge_names, dopamine_wm)
+        dopamine_edge_test = compute_profile_edge_damage(test_ids, lesion_indices, edge_matrix, edge_names, dopamine_wm)
+        dopamine_train_scores, dopamine_test_scores, dopamine_counts = compute_fold_scores(
+            config,
+            fold,
+            data,
+            train_ids,
+            test_ids,
+            lesion_node,
+            lesion_edge,
+            dopamine_node_train,
+            dopamine_node_test,
+            dopamine_edge_train,
+            dopamine_edge_test,
+            out_dir,
+            atlas_flat,
+            labels,
+            ref_img,
+            edge_matrix,
+            edge_names,
+            score_col="dopamine_ntdc",
+            map_prefix="dopamine",
+            weight_prefix="dopamine",
+            impact_prefix="dopamine",
+        )
+        dopamine_pred, dopamine_status = predict_fold(dopamine_train_scores, dopamine_test_scores, labels_outcome, threshold, covariates, outcome, "dopamine_ntdc", "D1/D2/DAT")
+        dopamine_score = dopamine_test_scores
+        dopamine_fold_row = {"fold": fold, **dopamine_counts}
+
+    beta_table["fold"] = fold
+    feature_table["fold"] = fold
+    for key, value in meta.items():
+        beta_table[key] = value
+        feature_table[key] = value
+
+    fold_row = {
+        "fold": fold,
+        "n_train": int(train.shape[0]),
+        "n_test": int(test.shape[0]),
+        "n_train_groups": int(train["cv_group"].nunique()),
+        "n_test_groups": int(test["cv_group"].nunique()),
+        "selected_nt": "|".join(beta_table.loc[beta_table["selected"], "nt_id"].astype(str).tolist()),
+        **meta,
+        **selected_counts,
+    }
+    return {
+        "fold": fold,
+        "test_scores": test_scores,
+        "fold_pred": fold_pred,
+        "fold_status": fold_status,
+        "dopamine_score": dopamine_score,
+        "dopamine_pred": dopamine_pred,
+        "dopamine_status": dopamine_status,
+        "dopamine_fold_row": dopamine_fold_row,
+        "beta_table": beta_table,
+        "feature_table": feature_table,
+        "fold_row": fold_row,
+    }
+
+
 def write_run_report(out_dir: Path, selection_summary: pd.DataFrame, performance: pd.DataFrame) -> None:
     """Write a compact run report."""
     lines = [
@@ -677,6 +809,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nihss-min", type=float, default=None)
     parser.add_argument("--nihss-max", type=float, default=None)
     parser.add_argument("--subgroup-label", default="")
+    parser.add_argument("--jobs", type=int, default=1)
     return parser.parse_args()
 
 
@@ -732,98 +865,66 @@ def main() -> None:
     dopamine_status_rows = []
     dopamine_fold_rows = []
 
-    for fold, (train_idx, test_idx) in enumerate(splitter.split(data, groups=data["cv_group"].astype(str)), start=1):
-        train = data.iloc[train_idx].copy()
-        test = data.iloc[test_idx].copy()
-        train_ids = train["subject_id"].astype(str).tolist()
-        test_ids = test["subject_id"].astype(str).tolist()
-        feature_table, beta_table, meta = elastic_net_nt_weights(train, feature_cols, nt_ids, covariates, outcome, train["cv_group"].astype(str).to_numpy(), config)
-        weights = beta_table.set_index("nt_id").reindex(nt_ids)["profile_weight"].fillna(0.0).to_numpy(dtype=np.float32)
-        gray_profile, wm_profile = save_profile_images(weights, gray_arrays, wm_arrays, ref_img, out_dir, fold)
+    fold_jobs = [
+        (fold, train_idx.tolist(), test_idx.tolist())
+        for fold, (train_idx, test_idx) in enumerate(splitter.split(data, groups=data["cv_group"].astype(str)), start=1)
+    ]
+    fold_context.clear()
+    fold_context.update(
+        {
+            "config": config,
+            "data": data,
+            "nt_ids": nt_ids,
+            "covariates": covariates,
+            "outcome": outcome,
+            "feature_cols": feature_cols,
+            "gray_arrays": gray_arrays,
+            "wm_arrays": wm_arrays,
+            "ref_img": ref_img,
+            "out_dir": out_dir,
+            "lesion_indices": lesion_indices,
+            "atlas_flat": atlas_flat,
+            "labels": labels,
+            "roi_counts": roi_counts,
+            "edge_matrix": edge_matrix,
+            "edge_names": edge_names,
+            "lesion_node": lesion_node,
+            "lesion_edge": lesion_edge,
+            "labels_outcome": labels_outcome,
+            "threshold": threshold,
+            "dopamine_profile": dopamine_profile,
+        }
+    )
+    jobs = max(1, min(int(args.jobs), len(fold_jobs)))
+    print(f"running {len(fold_jobs)} folds with jobs={jobs}", flush=True)
+    results = []
+    if jobs == 1:
+        for job in fold_jobs:
+            result = run_fold_job(job)
+            results.append(result)
+            print(f"finished fold {result['fold']}/{n_splits}", flush=True)
+    else:
+        # WSL/Linux使用fork共享只读大对象；避免spawn复制大型矩阵
+        context = mp.get_context("fork")
+        with ProcessPoolExecutor(max_workers=jobs, mp_context=context) as executor:
+            futures = [executor.submit(run_fold_job, job) for job in fold_jobs]
+            for future in as_completed(futures):
+                result = future.result()
+                results.append(result)
+                print(f"finished fold {result['fold']}/{n_splits}", flush=True)
 
-        profile_node_train = compute_profile_node_damage(train_ids, lesion_indices, atlas_flat, labels, roi_counts, gray_profile)
-        profile_node_test = compute_profile_node_damage(test_ids, lesion_indices, atlas_flat, labels, roi_counts, gray_profile)
-        profile_edge_train = compute_profile_edge_damage(train_ids, lesion_indices, edge_matrix, edge_names, wm_profile)
-        profile_edge_test = compute_profile_edge_damage(test_ids, lesion_indices, edge_matrix, edge_names, wm_profile)
-        train_scores, test_scores, selected_counts = compute_fold_scores(
-            config,
-            fold,
-            data,
-            train_ids,
-            test_ids,
-            lesion_node,
-            lesion_edge,
-            profile_node_train,
-            profile_node_test,
-            profile_edge_train,
-            profile_edge_test,
-            out_dir,
-            atlas_flat,
-            labels,
-            ref_img,
-            edge_matrix,
-            edge_names,
-        )
-        fold_pred, fold_status = predict_fold(train_scores, test_scores, labels_outcome, threshold, covariates, outcome)
-        prediction_rows.extend(fold_pred)
-        status_rows.extend(fold_status)
-        score_rows.append(test_scores)
-
-        if dopamine_profile is not None:
-            dopamine_gray, dopamine_wm = dopamine_profile
-            dopamine_node_train = compute_profile_node_damage(train_ids, lesion_indices, atlas_flat, labels, roi_counts, dopamine_gray)
-            dopamine_node_test = compute_profile_node_damage(test_ids, lesion_indices, atlas_flat, labels, roi_counts, dopamine_gray)
-            dopamine_edge_train = compute_profile_edge_damage(train_ids, lesion_indices, edge_matrix, edge_names, dopamine_wm)
-            dopamine_edge_test = compute_profile_edge_damage(test_ids, lesion_indices, edge_matrix, edge_names, dopamine_wm)
-            dopamine_train_scores, dopamine_test_scores, dopamine_counts = compute_fold_scores(
-                config,
-                fold,
-                data,
-                train_ids,
-                test_ids,
-                lesion_node,
-                lesion_edge,
-                dopamine_node_train,
-                dopamine_node_test,
-                dopamine_edge_train,
-                dopamine_edge_test,
-                out_dir,
-                atlas_flat,
-                labels,
-                ref_img,
-                edge_matrix,
-                edge_names,
-                score_col="dopamine_ntdc",
-                map_prefix="dopamine",
-                weight_prefix="dopamine",
-                impact_prefix="dopamine",
-            )
-            dopamine_pred, dopamine_status = predict_fold(dopamine_train_scores, dopamine_test_scores, labels_outcome, threshold, covariates, outcome, "dopamine_ntdc", "D1/D2/DAT")
-            dopamine_prediction_rows.extend(dopamine_pred)
-            dopamine_status_rows.extend(dopamine_status)
-            dopamine_score_rows.append(dopamine_test_scores)
-            dopamine_fold_rows.append({"fold": fold, **dopamine_counts})
-
-        beta_table["fold"] = fold
-        feature_table["fold"] = fold
-        for key, value in meta.items():
-            beta_table[key] = value
-            feature_table[key] = value
-        selection_rows.append(beta_table)
-        feature_coef_rows.append(feature_table)
-        fold_rows.append(
-            {
-                "fold": fold,
-                "n_train": int(train.shape[0]),
-                "n_test": int(test.shape[0]),
-                "n_train_groups": int(train["cv_group"].nunique()),
-                "n_test_groups": int(test["cv_group"].nunique()),
-                "selected_nt": "|".join(beta_table.loc[beta_table["selected"], "nt_id"].astype(str).tolist()),
-                **meta,
-                **selected_counts,
-            }
-        )
-        print(f"finished fold {fold}/{n_splits}")
+    for result in sorted(results, key=lambda item: int(item["fold"])):
+        prediction_rows.extend(result["fold_pred"])
+        status_rows.extend(result["fold_status"])
+        score_rows.append(result["test_scores"])
+        if result["dopamine_score"] is not None:
+            dopamine_prediction_rows.extend(result["dopamine_pred"])
+            dopamine_status_rows.extend(result["dopamine_status"])
+            dopamine_score_rows.append(result["dopamine_score"])
+            dopamine_fold_rows.append(result["dopamine_fold_row"])
+        selection_rows.append(result["beta_table"])
+        feature_coef_rows.append(result["feature_table"])
+        fold_rows.append(result["fold_row"])
 
     scores = pd.concat(score_rows, ignore_index=True).drop_duplicates(subset=["subject_id"], keep="last")
     selections = pd.concat(selection_rows, ignore_index=True)
