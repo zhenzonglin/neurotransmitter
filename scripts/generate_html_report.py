@@ -186,6 +186,88 @@ def plot_model_performance(performance: pd.DataFrame, output: Path) -> None:
     save_figure(fig, output)
 
 
+def roc_points(y_true: np.ndarray, scores: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    """计算ROC坐标。"""
+    if y_true.size == 0:
+        return np.array([]), np.array([]), np.nan
+    order = np.argsort(-scores)
+    y_sorted = y_true[order].astype(int)
+    score_sorted = scores[order]
+    distinct = np.r_[np.where(np.diff(score_sorted))[0], y_sorted.size - 1]
+    tp = np.cumsum(y_sorted)[distinct]
+    fp = (1 + distinct) - tp
+    positives = int(y_sorted.sum())
+    negatives = int(y_sorted.size - positives)
+    if positives == 0 or negatives == 0:
+        return np.array([]), np.array([]), np.nan
+    tpr = np.r_[0.0, tp / positives, 1.0]
+    fpr = np.r_[0.0, fp / negatives, 1.0]
+    auc = float(np.trapz(tpr, fpr))
+    return fpr, tpr, auc
+
+
+def plot_roc_curves(predictions: pd.DataFrame, config: dict, output: Path) -> pd.DataFrame:
+    """绘制折外ROC曲线。"""
+    binary_cfg = config.get("analysis", {}).get("binary_outcome", {})
+    threshold = float(binary_cfg.get("threshold", 2))
+    positive_if_less_equal = bool(binary_cfg.get("positive_if_less_equal", True))
+    required = {"model", "observed_mrs", "prob_mrs_le_threshold"}
+    if predictions.empty or not required.issubset(predictions.columns):
+        fig, ax = plt.subplots(figsize=(5.2, 4.2))
+        ax.text(0.5, 0.5, "ROC not available", ha="center", va="center")
+        ax.axis("off")
+        save_figure(fig, output)
+        return pd.DataFrame()
+
+    fig, ax = plt.subplots(figsize=(5.5, 4.8))
+    rows = []
+    for index, model in enumerate(predictions["model"].drop_duplicates().tolist()):
+        data = predictions[predictions["model"] == model].copy()
+        data = data.dropna(subset=["observed_mrs", "prob_mrs_le_threshold"])
+        if data.empty:
+            continue
+        observed = pd.to_numeric(data["observed_mrs"], errors="coerce").to_numpy(dtype=float)
+        prob_good = pd.to_numeric(data["prob_mrs_le_threshold"], errors="coerce").to_numpy(dtype=float)
+        ok = np.isfinite(observed) & np.isfinite(prob_good)
+        observed = observed[ok]
+        prob_good = prob_good[ok]
+        if observed.size == 0:
+            continue
+        if positive_if_less_equal:
+            y_true = (observed <= threshold).astype(int)
+            scores = prob_good
+            target = f"mRS <= {threshold:g}"
+        else:
+            y_true = (observed > threshold).astype(int)
+            scores = 1.0 - prob_good
+            target = f"mRS > {threshold:g}"
+        fpr, tpr, auc = roc_points(y_true, scores)
+        rows.append(
+            {
+                "model": model,
+                "n": int(y_true.size),
+                "positive_target": target,
+                "positive_n": int(y_true.sum()),
+                "negative_n": int(y_true.size - y_true.sum()),
+                "auc": auc,
+            }
+        )
+        if fpr.size:
+            ax.plot(fpr, tpr, color=palette[index % len(palette)], linewidth=1.8, label=f"{model} (AUC={auc:.3f})")
+
+    ax.plot([0, 1], [0, 1], color="#777777", linewidth=0.9, linestyle="--")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("False positive rate")
+    ax.set_ylabel("True positive rate")
+    ax.set_title("Out-of-sample ROC")
+    if rows:
+        ax.legend(loc="lower right", frameon=False)
+    fig.tight_layout()
+    save_figure(fig, output)
+    return pd.DataFrame(rows)
+
+
 def plot_pairwise(pairwise: pd.DataFrame, output: Path) -> None:
     """绘制主要指标配对差值。"""
     if pairwise.empty:
@@ -315,21 +397,27 @@ def render_html(context: dict[str, object], output: Path) -> None:
 	      <h2>4. 预测模型</h2>
 	      <div class="figure-grid">
 	        <figure><img src="{{ figures.model_performance }}" alt="model performance"><figcaption>Figure 4. Prediction metrics.</figcaption></figure>
-	        <figure><img src="{{ figures.pairwise_delta }}" alt="pairwise delta"><figcaption>Figure 5. Pairwise bootstrap for ordinal log loss.</figcaption></figure>
+	        <figure><img src="{{ figures.roc_curve }}" alt="roc curve"><figcaption>Figure 5. Out-of-sample ROC curves.</figcaption></figure>
+	        <figure><img src="{{ figures.pairwise_delta }}" alt="pairwise delta"><figcaption>Figure 6. Pairwise bootstrap for ordinal log loss.</figcaption></figure>
       </div>
       <h3>prediction performance</h3>
       <div class="table-wrap">{{ performance_table }}</div>
+	      <h3>ROC AUC</h3>
+	      <div class="table-wrap">{{ roc_table }}</div>
 	      <h3>pairwise bootstrap</h3>
 	      <div class="table-wrap">{{ pairwise_table }}</div>
 	    </section>
 	    <section class="card">
 	      <h2>5. D1/D2/DAT 探索预测</h2>
 	      <div class="figure-grid">
-	        <figure><img src="{{ figures.dopamine_performance }}" alt="dopamine performance"><figcaption>Figure 6. Exploratory D1/D2/DAT prediction metrics.</figcaption></figure>
-	        <figure><img src="{{ figures.dopamine_pairwise_delta }}" alt="dopamine pairwise delta"><figcaption>Figure 7. Exploratory D1/D2/DAT pairwise bootstrap for ordinal log loss.</figcaption></figure>
+	        <figure><img src="{{ figures.dopamine_performance }}" alt="dopamine performance"><figcaption>Figure 7. Exploratory D1/D2/DAT prediction metrics.</figcaption></figure>
+	        <figure><img src="{{ figures.dopamine_roc_curve }}" alt="dopamine roc curve"><figcaption>Figure 8. Exploratory D1/D2/DAT out-of-sample ROC curves.</figcaption></figure>
+	        <figure><img src="{{ figures.dopamine_pairwise_delta }}" alt="dopamine pairwise delta"><figcaption>Figure 9. Exploratory D1/D2/DAT pairwise bootstrap for ordinal log loss.</figcaption></figure>
 	      </div>
 	      <h3>D1/D2/DAT prediction performance</h3>
 	      <div class="table-wrap">{{ dopamine_performance_table }}</div>
+	      <h3>D1/D2/DAT ROC AUC</h3>
+	      <div class="table-wrap">{{ dopamine_roc_table }}</div>
 	      <h3>D1/D2/DAT pairwise bootstrap</h3>
 	      <div class="table-wrap">{{ dopamine_pairwise_table }}</div>
 	    </section>
@@ -369,30 +457,40 @@ def main() -> None:
     folds = read_table(ml_dir / "fold_manifest.csv")
     performance = read_table(ml_dir / "models" / "model_prediction_performance.csv")
     pairwise = read_table(ml_dir / "models" / "model_prediction_pairwise_bootstrap.csv")
+    predictions = read_table(ml_dir / "models" / "model_prediction_cv.csv")
     dopamine_dir = ml_dir / "exploratory_profiles"
     dopamine_performance = read_table(dopamine_dir / "dopamine_d1_d2_dat_model_prediction_performance.csv")
     dopamine_pairwise = read_table(dopamine_dir / "dopamine_d1_d2_dat_model_prediction_pairwise_bootstrap.csv")
+    dopamine_predictions = read_table(dopamine_dir / "dopamine_d1_d2_dat_model_prediction_cv.csv")
 
     figure_paths = {
         "cohort_qc": figure_dir / "cohort_qc.png",
         "selection_frequency": figure_dir / "ml_profile_selection_frequency.png",
         "fold_selection": figure_dir / "ml_profile_fold_selection.png",
         "model_performance": figure_dir / "ml_profile_model_performance.png",
+        "roc_curve": figure_dir / "ml_profile_roc_curve.png",
         "pairwise_delta": figure_dir / "ml_profile_pairwise_delta.png",
         "dopamine_performance": figure_dir / "dopamine_d1_d2_dat_model_performance.png",
+        "dopamine_roc_curve": figure_dir / "dopamine_d1_d2_dat_roc_curve.png",
         "dopamine_pairwise_delta": figure_dir / "dopamine_d1_d2_dat_pairwise_delta.png",
     }
     plot_cohort_qc(manifest, lesion_qc, phenotype_qc, figure_paths["cohort_qc"])
     plot_selection(selection, figure_paths["selection_frequency"])
     plot_fold_selection(folds, figure_paths["fold_selection"])
     plot_model_performance(performance, figure_paths["model_performance"])
+    roc_metrics = plot_roc_curves(predictions, config, figure_paths["roc_curve"])
     plot_pairwise(pairwise, figure_paths["pairwise_delta"])
     plot_model_performance(dopamine_performance, figure_paths["dopamine_performance"])
+    dopamine_roc_metrics = plot_roc_curves(dopamine_predictions, config, figure_paths["dopamine_roc_curve"])
     plot_pairwise(dopamine_pairwise, figure_paths["dopamine_pairwise_delta"])
 
     qc_summary = build_qc_summary(config, manifest, lesion_qc, phenotype_qc)
     qc_summary_path = report_dir / "lesion_qc_summary.csv"
     qc_summary.to_csv(qc_summary_path, index=False)
+    roc_metrics_path = report_dir / "model_prediction_roc_auc.csv"
+    roc_metrics.to_csv(roc_metrics_path, index=False)
+    dopamine_roc_metrics_path = report_dir / "dopamine_d1_d2_dat_model_prediction_roc_auc.csv"
+    dopamine_roc_metrics.to_csv(dopamine_roc_metrics_path, index=False)
     file_index = build_file_index(project_dir, args.profile_subdir, args.report_subdir)
     file_index_path = report_dir / "report_file_index.csv"
     file_index.to_csv(file_index_path, index=False)
@@ -408,8 +506,10 @@ def main() -> None:
             "selection_table": table_html(selection, 20),
             "fold_table": table_html(folds, 20),
             "performance_table": table_html(performance, 20),
+            "roc_table": table_html(roc_metrics, 20),
             "pairwise_table": table_html(pairwise, 40),
             "dopamine_performance_table": table_html(dopamine_performance, 20),
+            "dopamine_roc_table": table_html(dopamine_roc_metrics, 20),
             "dopamine_pairwise_table": table_html(dopamine_pairwise, 40),
             "file_index_table": table_html(file_index, 200),
         },
