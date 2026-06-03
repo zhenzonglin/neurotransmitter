@@ -12,7 +12,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from nt_analysis.config import analysis_covariates, ensure_dir, load_config, outcome_column, project_path
+from nt_analysis.config import analysis_covariates, ensure_dir, load_config, outcome_column, prognostic_endpoint_specs, project_path
 from nt_analysis.ids import normalize_subject_id, parse_lesion_subject
 from nt_analysis.images import lesion_volume_ml, resample_like
 from nt_analysis.tables import write_csv
@@ -27,6 +27,11 @@ def normalize_qc_value(value: object) -> str:
     return str(value).strip()
 
 
+def unique_list(values: list[str]) -> list[str]:
+    """Keep values in order without duplication."""
+    return list(dict.fromkeys(values))
+
+
 def load_phenotype(config: dict) -> pd.DataFrame:
     """Load and normalize phenotype data."""
     path = project_path(config, config["inputs"]["phenotype_file"])
@@ -37,19 +42,28 @@ def load_phenotype(config: dict) -> pd.DataFrame:
     covariate_map = config["inputs"].get("covariates", {})
     rename = {source: target for target, source in covariate_map.items()}
     rename[config["inputs"]["outcome_column"]] = outcome
+    endpoints = prognostic_endpoint_specs(config)
+    for endpoint in endpoints:
+        raw_outcome = endpoint.get("outcome_column")
+        internal_outcome = endpoint.get("outcome")
+        if raw_outcome and internal_outcome:
+            rename[str(raw_outcome)] = str(internal_outcome)
     df = df.rename(columns=rename)
     qc_cfg = config.get("qc", {})
     qc_cols = []
-    if qc_cfg.get("exclude_m3_stroke", False):
+    if config.get("prognostic_ntdc_atlas", {}).get("endpoints"):
+        qc_cols.extend(str(endpoint["stroke_column"]) for endpoint in endpoints if endpoint.get("stroke_column"))
+    elif qc_cfg.get("exclude_m3_stroke", False):
         qc_cols.append(qc_cfg.get("m3_stroke_column", "m3_stroke"))
 
-    keep = ["subject_id", outcome, *covariate_map.keys(), *qc_cols]
+    endpoint_outcomes = [str(endpoint["outcome"]) for endpoint in endpoints if endpoint.get("outcome")]
+    keep = unique_list(["subject_id", outcome, *endpoint_outcomes, *covariate_map.keys(), *qc_cols])
     out = df[[column for column in keep if column in df.columns]].copy()
     for column, mapping in config["inputs"].get("categorical_maps", {}).items():
         if column in out.columns:
             # 按配置转换分类变量
             out[column] = out[column].astype(str).str.strip().map(mapping).fillna(out[column])
-    for column in [outcome, *covariate_map.keys()]:
+    for column in unique_list([outcome, *endpoint_outcomes, *covariate_map.keys()]):
         if column in out.columns:
             out[column] = pd.to_numeric(out[column], errors="coerce")
     return out
@@ -155,7 +169,22 @@ def main() -> None:
     phenotype = load_phenotype(config)
     analysis_manifest = merge_manifest_phenotype(active_manifest, phenotype)
     qc_cfg = config.get("qc", {})
-    if qc_cfg.get("exclude_m3_stroke", False):
+    endpoints = prognostic_endpoint_specs(config)
+    if config.get("prognostic_ntdc_atlas", {}).get("endpoints"):
+        excluded_columns = []
+        for endpoint in endpoints:
+            endpoint_id = str(endpoint["id"])
+            column = str(endpoint["stroke_column"])
+            exclude_values = {normalize_qc_value(value) for value in endpoint.get("stroke_exclude_values", [2])}
+            if column in analysis_manifest.columns:
+                flag = f"excluded_{endpoint_id}_stroke"
+                analysis_manifest[flag] = analysis_manifest[column].map(normalize_qc_value).isin(exclude_values)
+                excluded_columns.append(flag)
+            else:
+                analysis_manifest[f"excluded_{endpoint_id}_stroke"] = False
+        analysis_manifest["included_by_phenotype_qc"] = True
+        pre_exclusion_manifest = analysis_manifest.copy()
+    elif qc_cfg.get("exclude_m3_stroke", False):
         column = qc_cfg.get("m3_stroke_column", "m3_stroke")
         exclude_values = {normalize_qc_value(value) for value in qc_cfg.get("m3_stroke_exclude_values", [2])}
 
@@ -163,19 +192,22 @@ def main() -> None:
             raise KeyError(f"missing m3 stroke column: {column}")
 
         analysis_manifest["excluded_m3_stroke"] = analysis_manifest[column].map(normalize_qc_value).isin(exclude_values)
+        analysis_manifest["included_by_phenotype_qc"] = ~analysis_manifest["excluded_m3_stroke"]
+        pre_exclusion_manifest = analysis_manifest.copy()
+        analysis_manifest = analysis_manifest.loc[~analysis_manifest["excluded_m3_stroke"]].copy()
     else:
         analysis_manifest["excluded_m3_stroke"] = False
-    analysis_manifest["included_by_phenotype_qc"] = ~analysis_manifest["excluded_m3_stroke"]
+        analysis_manifest["included_by_phenotype_qc"] = True
+        pre_exclusion_manifest = analysis_manifest.copy()
     qc_dir = project_path(config, config["outputs"]["qc_dir"])
-    pre_exclusion_manifest = analysis_manifest.copy()
-    analysis_manifest = analysis_manifest.loc[~analysis_manifest["excluded_m3_stroke"]].copy()
     write_csv(lesion_qc, qc_dir / "lesion_qc.csv")
     write_csv(pre_exclusion_manifest, qc_dir / "phenotype_merge_qc.csv")
     write_csv(analysis_manifest, qc_dir / "subject_manifest.csv")
 
     outcome = outcome_column(config)
     covariates = analysis_covariates(config, "model_covariates")
-    keep = ["subject_id", "lesion_path", outcome, *covariates]
+    endpoint_outcomes = [str(endpoint["outcome"]) for endpoint in endpoints if endpoint.get("outcome")]
+    keep = unique_list(["subject_id", "lesion_path", outcome, *endpoint_outcomes, *covariates])
     write_csv(analysis_manifest[[column for column in keep if column in analysis_manifest.columns]], qc_dir / "analysis_input_qc.csv")
 
     reference_2mm = Path(active_manifest.iloc[0]["lesion_path"])

@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from compute_impact_scores import add_cv_group, compute_lesion_node_load, load_lesion_feature_tables  # noqa: E402
-from nt_analysis.config import analysis_covariates, ensure_dir, load_config, outcome_column, project_path  # noqa: E402
+from nt_analysis.config import active_prognostic_endpoint, analysis_covariates, ensure_dir, load_config, outcome_column, project_path  # noqa: E402
 from nt_analysis.tables import write_csv  # noqa: E402
 from run_ml_profile_analysis import (  # noqa: E402
     atlas_info,
@@ -44,6 +44,15 @@ def selected_specs(config: dict) -> list[dict[str, object]]:
     return out
 
 
+def normalize_qc_value(value: object) -> str:
+    """Normalize QC values for recurrence matching."""
+    if pd.isna(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
 def load_manifest(config: dict, max_subjects: int | None) -> pd.DataFrame:
     """Load active subjects."""
     manifest_path = project_path(config, config["outputs"]["qc_dir"], "subject_manifest.csv")
@@ -56,6 +65,21 @@ def load_manifest(config: dict, max_subjects: int | None) -> pd.DataFrame:
     if missing:
         raise KeyError(f"missing columns in subject_manifest.csv: {missing}")
     data = manifest.dropna(subset=required).copy()
+    endpoint = active_prognostic_endpoint(config)
+    endpoint_id = str(endpoint.get("id", "endpoint"))
+    excluded_flag = f"excluded_{endpoint_id}_stroke"
+    stroke_column = endpoint.get("stroke_column")
+    if excluded_flag in data.columns:
+        excluded = data[excluded_flag].astype(bool)
+        data = data.loc[~excluded].copy()
+    elif stroke_column:
+        stroke_column = str(stroke_column)
+        if stroke_column not in data.columns:
+            raise KeyError(f"missing recurrence column for endpoint {endpoint.get('id')}: {stroke_column}")
+        exclude_values = {normalize_qc_value(value) for value in endpoint.get("stroke_exclude_values", [2])}
+        excluded = data[stroke_column].map(normalize_qc_value).isin(exclude_values)
+        data[excluded_flag] = excluded
+        data = data.loc[~excluded].copy()
     data["subject_id"] = data["subject_id"].astype(str)
     if max_subjects is not None:
         data = data.head(int(max_subjects)).copy()
@@ -260,6 +284,7 @@ def write_metadata(
     write_csv(pd.DataFrame(edge_rows), out_dir / "edge_table.csv")
     write_csv(pd.DataFrame({"nt_index": list(range(len(nt_ids))), "nt_id": nt_ids}), out_dir / "nt_table.csv")
     metadata = {
+        "endpoint": active_prognostic_endpoint(config),
         "n_subjects": int(data.shape[0]),
         "n_roi": int(len(labels)),
         "n_edges": int(len(edge_names)),

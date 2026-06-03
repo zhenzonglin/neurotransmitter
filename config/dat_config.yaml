@@ -169,6 +169,28 @@ resources:
 prognostic_ntdc_atlas:
   output_dir: derivatives/prognostic_ntdc_atlas
   report_dir: derivatives/reports_prognostic_ntdc_atlas
+  endpoints:
+  - id: m3
+    label: 3-month mRS
+    outcome_column: mRS_3m
+    outcome: mrs_3m
+    stroke_column: m3_stroke
+    stroke_exclude_values:
+    - 2
+  - id: m6
+    label: 6-month mRS
+    outcome_column: mRS_6m
+    outcome: mrs_6m
+    stroke_column: m6_stroke
+    stroke_exclude_values:
+    - 2
+  - id: m12
+    label: 12-month mRS
+    outcome_column: mRS_12m
+    outcome: mrs_12m
+    stroke_column: y1_stroke
+    stroke_exclude_values:
+    - 2
   nt_ids: null
   n_splits: 10
   edge_damage_primary: fraction

@@ -138,6 +138,7 @@ def main() -> None:
     metadata_path = out_dir / "feature_metadata.json"
     if metadata_path.exists():
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    endpoint = metadata.get("endpoint", {})
 
     figures = {
         "roi_heatmap": figure_dir / "roi_nt_weight_heatmap.png",
@@ -194,6 +195,7 @@ code {{ background: #eef4f8; padding: 2px 5px; border-radius: 4px; }}
 <h1>Prognostic NTDC Atlas Report</h1>
 <section>
 <h2>Run Summary</h2>
+<p>endpoint: <code>{html.escape(str(endpoint.get("label", endpoint.get("id", "main"))))}</code> | outcome: <code>{html.escape(str(endpoint.get("outcome", "NA")))}</code> | recurrence exclusion: <code>{html.escape(str(endpoint.get("stroke_column", "NA")))} = {html.escape(str(endpoint.get("stroke_exclude_values", [2])))}</code></p>
 <div class="grid">
 <div class="metric"><span>subjects</span><b>{int(subject.shape[0]) if not subject.empty else metadata.get("n_subjects", "NA")}</b></div>
 <div class="metric"><span>ROI</span><b>{metadata.get("n_roi", 156)}</b></div>
