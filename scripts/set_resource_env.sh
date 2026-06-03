@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-set -euo pipefail
+
+# 不设置set -e，避免source后影响当前终端
 
 config_path="${1:-config/dat_config.yaml}"
 
+if [ ! -f "$config_path" ]; then
+  echo "missing config: $config_path" >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 read_yaml_value() {
   local key="$1"
-  python - "$config_path" "$key" <<'PY'
+  python - "$config_path" "$key" 2>/dev/null <<'PY'
 import sys
 import yaml
 
@@ -22,9 +28,9 @@ else:
 PY
 }
 
-blas_threads="$(read_yaml_value resources.blas_threads)"
-lqt_dsi_cpus="$(read_yaml_value resources.lqt_dsi_cpus)"
-lqt_dsi_memory="$(read_yaml_value resources.lqt_dsi_memory)"
+blas_threads="$(read_yaml_value resources.blas_threads || true)"
+lqt_dsi_cpus="$(read_yaml_value resources.lqt_dsi_cpus || true)"
+lqt_dsi_memory="$(read_yaml_value resources.lqt_dsi_memory || true)"
 
 blas_threads="${blas_threads:-4}"
 lqt_dsi_cpus="${lqt_dsi_cpus:-3}"
