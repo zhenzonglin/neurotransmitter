@@ -155,3 +155,35 @@ outputs:
   edge_dir: derivatives/shared
   model_dir: derivatives/ml_profile/models
   impact_dir: derivatives/ml_profile
+resources:
+  total_cores: 60
+  memory_gb: 100
+  blas_threads: 4
+  lqt_jobs: 20
+  lqt_dsi_cpus: 3
+  lqt_dsi_memory: 4500m
+  atlas_build_jobs: 8
+  fold_jobs: 10
+  edge_model_jobs: 50
+  report_jobs: 8
+prognostic_ntdc_atlas:
+  output_dir: derivatives/prognostic_ntdc_atlas
+  report_dir: derivatives/reports_prognostic_ntdc_atlas
+  nt_ids: null
+  n_splits: 10
+  edge_damage_primary: fraction
+  edge_damage_sensitivity: sum
+  denominator_min_percentile: 5
+  ridge_c: 1.0
+  max_iter: 5000
+  sensitivity_models:
+  - elasticnet_logistic
+  - linear_svm
+  - gradient_boosting
+  sensitivity_top_nodes: 156
+  sensitivity_top_edges: 200
+  prediction_bootstrap: 1000
+  chunk_size: 256
+  jobs: 8
+  fold_jobs: 10
+  edge_model_jobs: 50
