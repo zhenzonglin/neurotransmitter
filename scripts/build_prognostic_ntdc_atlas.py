@@ -273,6 +273,7 @@ def write_metadata(
     edge_names: list[str],
     nt_ids: list[str],
     ref_img: nib.Nifti1Image,
+    config: dict,
 ) -> None:
     """Write array metadata."""
     write_csv(data, out_dir / "subject_table.csv")
@@ -322,7 +323,7 @@ def main() -> None:
     atlas_flat, labels, _ = atlas_info(config)
     lesion_indices = load_lesion_indices(data)
     edge_matrix, edge_names = load_edge_matrix(config)
-    write_metadata(out_dir, data, labels, edge_names, nt_ids, ref_img)
+    write_metadata(out_dir, data, labels, edge_names, nt_ids, ref_img, config)
     write_lesion_tables(config, data, out_dir)
     print(f"building node NT damage for {data.shape[0]} subjects, {len(labels)} ROI, {len(nt_ids)} NT", flush=True)
     compute_node_damage(data, lesion_indices, atlas_flat, labels, gray_arrays, out_dir)
