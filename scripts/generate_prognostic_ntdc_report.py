@@ -132,6 +132,8 @@ def main() -> None:
     performance = read_table(out_dir / "prediction_performance.csv")
     pairwise = read_table(out_dir / "pairwise_bootstrap.csv")
     edge_qc = read_table(out_dir / "nt_edge_denominator_qc.csv")
+    edge_support = read_table(out_dir / "edge_support_qc.csv")
+    edge_support_summary = read_table(out_dir / "edge_support_summary.csv")
     agreement = read_table(out_dir / "model_agreement_summary.csv")
     fold_runtime = read_table(out_dir / "fold_runtime.csv")
     metadata = {}
@@ -162,10 +164,18 @@ def main() -> None:
             out_dir / "prediction_cv.csv",
             out_dir / "prediction_performance.csv",
             out_dir / "pairwise_bootstrap.csv",
+            out_dir / "edge_support_qc.csv",
+            out_dir / "edge_support_summary.csv",
             out_dir / "model_agreement_summary.csv",
         ],
         project_dir,
     )
+    theoretical_edges = metadata.get("n_edges", 12090)
+    supported_edges = "NA"
+    excluded_edges = "NA"
+    if not edge_support_summary.empty:
+        supported_edges = int(edge_support_summary.loc[0, "tract_supported_edges"])
+        excluded_edges = int(edge_support_summary.loc[0, "excluded_unsupported_edges"])
 
     image_tags = []
     for name, path in figures.items():
@@ -181,7 +191,7 @@ def main() -> None:
 body {{ font-family: Arial, sans-serif; margin: 32px; color: #102030; background: #f7f9fb; }}
 section {{ background: white; border: 1px solid #d9e1e8; border-radius: 8px; padding: 22px; margin-bottom: 22px; }}
 h1, h2 {{ color: #0b253f; }}
-.grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }}
+.grid {{ display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }}
 .metric {{ background: #eef4f8; border-radius: 6px; padding: 12px; }}
 .metric b {{ display: block; font-size: 20px; }}
 .data-table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
@@ -199,7 +209,9 @@ code {{ background: #eef4f8; padding: 2px 5px; border-radius: 4px; }}
 <div class="grid">
 <div class="metric"><span>subjects</span><b>{int(subject.shape[0]) if not subject.empty else metadata.get("n_subjects", "NA")}</b></div>
 <div class="metric"><span>ROI</span><b>{metadata.get("n_roi", 156)}</b></div>
-<div class="metric"><span>edges</span><b>{metadata.get("n_edges", 12090)}</b></div>
+<div class="metric"><span>theoretical edges</span><b>{theoretical_edges}</b></div>
+<div class="metric"><span>modeled edges</span><b>{supported_edges}</b></div>
+<div class="metric"><span>excluded edges</span><b>{excluded_edges}</b></div>
 <div class="metric"><span>NT systems</span><b>{len(nt_ids)}</b></div>
 </div>
 <p>4D atlas shape: <code>{html.escape(four_d_shape or "not available")}</code></p>
@@ -219,6 +231,11 @@ code {{ background: #eef4f8; padding: 2px 5px; border-radius: 4px; }}
 <section>
 <h2>Pairwise Bootstrap</h2>
 {table_html(pairwise)}
+</section>
+<section>
+<h2>Edge Support QC</h2>
+{table_html(edge_support_summary)}
+{table_html(edge_support)}
 </section>
 <section>
 <h2>Edge Denominator QC</h2>

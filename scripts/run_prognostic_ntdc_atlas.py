@@ -49,6 +49,11 @@ def load_inputs(config: dict, max_subjects: int | None) -> dict[str, object]:
     edge = pd.read_csv(out_dir / "edge_table.csv")
     nt = pd.read_csv(out_dir / "nt_table.csv")
     n_nt = nt.shape[0]
+    support_qc, support_summary = edge_support_tables(out_dir, edge)
+    supported_edge_names = support_qc.loc[support_qc["tract_supported"], "edge"].astype(str).tolist()
+    supported_index = support_qc.index[support_qc["tract_supported"]].to_numpy(dtype=int)
+    if len(supported_edge_names) == 0:
+        raise RuntimeError("no tract-supported edges were found")
     lesion_node = pd.read_csv(out_dir / "lesion_node_damage.csv", dtype={"subject_id": str})
     lesion_edge = pd.read_csv(out_dir / "lesion_edge_damage.csv", dtype={"subject_id": str})
     ids = subject["subject_id"].astype(str).tolist()
@@ -56,9 +61,19 @@ def load_inputs(config: dict, max_subjects: int | None) -> dict[str, object]:
     lesion_edge["subject_id"] = lesion_edge["subject_id"].astype(str)
     lesion_node = lesion_node.set_index("subject_id").loc[ids].reset_index()
     lesion_edge = lesion_edge.set_index("subject_id").loc[ids].reset_index()
+    missing_edges = [name for name in supported_edge_names if name not in lesion_edge.columns]
+    if missing_edges:
+        raise KeyError(f"missing supported edge columns in lesion_edge_damage.csv: {missing_edges[:10]}")
+    lesion_edge = lesion_edge[["subject_id", *supported_edge_names]].copy()
     node_damage = np.load(out_dir / f"nt_node_damage_{n_nt}nt.npy", mmap_mode="r")[: subject.shape[0]]
-    edge_damage = np.load(out_dir / f"nt_edge_damage_fraction_{n_nt}nt.npy", mmap_mode="r")[: subject.shape[0]]
-    edge_sum = np.load(out_dir / f"nt_edge_damage_sum_{n_nt}nt.npy", mmap_mode="r")[: subject.shape[0]]
+    # 只让有纤维体素和递质分母的边进入模型
+    edge_damage_full = np.load(out_dir / f"nt_edge_damage_fraction_{n_nt}nt.npy", mmap_mode="r")
+    edge_sum_full = np.load(out_dir / f"nt_edge_damage_sum_{n_nt}nt.npy", mmap_mode="r")
+    edge_damage = np.asarray(edge_damage_full[: subject.shape[0], supported_index, :], dtype=np.float32)
+    edge_sum = np.asarray(edge_sum_full[: subject.shape[0], supported_index, :], dtype=np.float32)
+    edge = edge.iloc[supported_index].reset_index(drop=True)
+    write_csv(support_qc, out_dir / "edge_support_qc.csv")
+    write_csv(support_summary, out_dir / "edge_support_summary.csv")
     return {
         "out_dir": out_dir,
         "subject": subject,
@@ -70,7 +85,57 @@ def load_inputs(config: dict, max_subjects: int | None) -> dict[str, object]:
         "node_damage": node_damage,
         "edge_damage": edge_damage,
         "edge_sum": edge_sum,
+        "edge_support_qc": support_qc,
+        "edge_support_summary": support_summary,
     }
+
+
+def edge_support_tables(out_dir: Path, edge: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build tract-supported edge QC tables."""
+    qc_path = out_dir / "nt_edge_denominator_qc.csv"
+    if not qc_path.exists():
+        raise FileNotFoundError(f"missing edge denominator QC: {qc_path}")
+    qc = pd.read_csv(qc_path)
+    required = {"edge", "nt_id", "denominator", "low_denominator"}
+    missing = required - set(qc.columns)
+    if missing:
+        raise KeyError(f"missing columns in nt_edge_denominator_qc.csv: {sorted(missing)}")
+    qc["edge"] = qc["edge"].astype(str)
+    qc["low_denominator_bool"] = qc["low_denominator"].astype(str).str.lower().isin(["true", "1", "yes"])
+    edge_order = edge["edge"].astype(str).tolist()
+    grouped = (
+        qc.assign(positive_denominator=qc["denominator"].astype(float) > np.finfo(np.float32).eps)
+        .groupby("edge", as_index=False)
+        .agg(
+            n_nt=("nt_id", "count"),
+            positive_nt=("positive_denominator", "sum"),
+            low_nt=("low_denominator_bool", "sum"),
+            median_denominator=("denominator", "median"),
+            max_denominator=("denominator", "max"),
+        )
+    )
+    grouped["tract_supported"] = grouped["positive_nt"].astype(int) > 0
+    grouped["all_zero_denominator"] = grouped["positive_nt"].astype(int) == 0
+    support = pd.DataFrame({"edge": edge_order}).merge(grouped, on="edge", how="left")
+    support["n_nt"] = support["n_nt"].fillna(0).astype(int)
+    support["positive_nt"] = support["positive_nt"].fillna(0).astype(int)
+    support["low_nt"] = support["low_nt"].fillna(0).astype(int)
+    support["median_denominator"] = support["median_denominator"].fillna(0.0).astype(float)
+    support["max_denominator"] = support["max_denominator"].fillna(0.0).astype(float)
+    support["tract_supported"] = support["tract_supported"].fillna(False).astype(bool)
+    support["all_zero_denominator"] = support["all_zero_denominator"].fillna(True).astype(bool)
+    summary = pd.DataFrame(
+        [
+            {
+                "theoretical_edges": int(support.shape[0]),
+                "tract_supported_edges": int(support["tract_supported"].sum()),
+                "excluded_unsupported_edges": int((~support["tract_supported"]).sum()),
+                "edges_with_any_low_denominator": int((support["low_nt"] > 0).sum()),
+                "nt_systems": int(qc["nt_id"].nunique()),
+            }
+        ]
+    )
+    return support, summary
 
 
 def align_by_subject(df: pd.DataFrame, subject_ids: list[str]) -> pd.DataFrame:
