@@ -1,17 +1,29 @@
 from __future__ import annotations
 
 import re
+import math
 from pathlib import Path
 
 
 def normalize_subject_id(value: object) -> str:
-    """Normalize subject IDs to TMS001 style."""
-    text = str(value).strip().upper()
+    """Normalize TMS or numeric subject IDs."""
+    if value is None:
+        raise ValueError("cannot parse subject id: None")
+    if isinstance(value, float):
+        if math.isnan(value):
+            raise ValueError("cannot parse subject id: nan")
+        if value.is_integer():
+            value = int(value)
+    text = str(value).strip().upper().replace(" ", "")
     text = text.replace("-", "").replace("_", "")
-    match = re.search(r"TMS(\d{1,3})", text)
-    if not match:
-        raise ValueError(f"cannot parse subject id: {value}")
-    return f"TMS{int(match.group(1)):03d}"
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    match = re.search(r"TMS(\d+)", text)
+    if match:
+        return f"TMS{int(match.group(1)):03d}"
+    if text.isdigit():
+        return text
+    raise ValueError(f"cannot parse subject id: {value}")
 
 
 def parse_lesion_subject(path: str | Path, pattern: str) -> str:

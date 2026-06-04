@@ -1,15 +1,15 @@
-project_dir: .
+project_dir: /home/zhenzong2/analysis/neurotransmitter
 inputs:
   lesion_glob: lesion/*.nii*
   phenotype_file: phenotype.xlsx
   phenotype_sheet: Sheet1
-  lesion_subject_regex: sub-(TMS\d{3})ses\d+
+  lesion_subject_regex: ^(\d+)_Lesion
   phenotype_id_column: ID
   outcome_column: mRS_3m
   covariates:
-    age: 年龄
-    sex: 性别
-    nihss: NIHSS
+    age: AGE
+    nihss: A_NIHSS
+    H_MRS: H_MRS
   categorical_maps:
     sex:
       男: 1
@@ -28,9 +28,9 @@ analysis:
   cv_group_column: subject_id
   model_covariates:
   - age
-  - sex
   - nihss
   - lesion_volume_ml
+  - H_MRS
   binary_outcome:
     threshold: 2
     positive_if_less_equal: true
@@ -63,71 +63,125 @@ ml_profile:
   - 0.1
   - 0.3
   - 1.0
+resources:
+  total_cores: 60
+  memory_gb: 100
+  blas_threads: 4
+  lqt_jobs: 20
+  lqt_dsi_cpus: 3
+  lqt_dsi_memory: 4500m
+  atlas_build_jobs: 8
+  fold_jobs: 10
+  edge_model_jobs: 50
+  report_jobs: 8
+prognostic_ntdc_atlas:
+  output_dir: derivatives/prognostic_ntdc_atlas
+  report_dir: derivatives/reports_prognostic_ntdc_atlas
+  endpoints:
+  - id: m3
+    label: 3-month mRS
+    outcome_column: mRS_3m
+    outcome: mrs_3m
+    stroke_column: m3_stroke
+    stroke_exclude_values:
+    - 2
+  - id: m6
+    label: 6-month mRS
+    outcome_column: mRS_6m
+    outcome: mrs_6m
+    stroke_column: m6_stroke
+    stroke_exclude_values:
+    - 2
+  - id: m12
+    label: 12-month mRS
+    outcome_column: mRS_12m
+    outcome: mrs_12m
+    stroke_column: y1_stroke
+    stroke_exclude_values:
+    - 2
+  nt_ids: null
+  n_splits: 10
+  edge_damage_primary: fraction
+  edge_damage_sensitivity: sum
+  denominator_min_percentile: 5
+  ridge_c: 1.0
+  max_iter: 5000
+  sensitivity_models:
+  - elasticnet_logistic
+  - linear_svm
+  - gradient_boosting
+  sensitivity_top_nodes: 156
+  sensitivity_top_edges: 200
+  prediction_bootstrap: 1000
+  chunk_size: 256
+  jobs: 8
+  fold_jobs: 10
+  edge_model_jobs: 50
 neurotransmitters:
-- id: a4b2
-  label: alpha4beta2 nicotinic acetylcholine receptor
+- alves_name: A4B2
   hansen_file: A4B2_flubatine_hc30_hillmer.nii.gz
-  alves_name: A4B2
+  id: a4b2
+  label: alpha4beta2 nicotinic acetylcholine receptor
   neurovault_id: 802960
-- id: m1
-  label: muscarinic acetylcholine receptor M1
+- alves_name: M1
   hansen_file: M1_lsn_hc24_naganawa.nii.gz
-  alves_name: M1
+  id: m1
+  label: muscarinic acetylcholine receptor M1
   neurovault_id: 802964
-- id: vacht
-  label: vesicular acetylcholine transporter
+- alves_name: VAChT
   hansen_file: VAChT_feobv_hc18_aghourian_sum.nii
-  alves_name: VAChT
+  id: vacht
+  label: vesicular acetylcholine transporter
   neurovault_id: 802966
-- id: d1
-  label: dopamine receptor D1
+- alves_name: D1
   hansen_file: D1_SCH23390_hc13_kaller.nii
-  alves_name: D1
+  id: d1
+  label: dopamine receptor D1
   neurovault_id: 802961
-- id: d2
-  label: dopamine receptor D2
+- alves_name: D2
   hansen_file: D2_flb457_hc37_smith.nii.gz
-  alves_name: D2
+  id: d2
+  label: dopamine receptor D2
   neurovault_id: 802962
-- id: dat
-  label: dopamine transporter
+- alves_name: DAT
   hansen_file: DAT_fpcit_hc174_dukart_spect.nii
-  alves_name: DAT
+  id: dat
+  label: dopamine transporter
   neurovault_id: 802963
-- id: nat
-  label: noradrenaline transporter
+- alves_name: NAT
   hansen_file: NAT_MRB_hc77_ding.nii.gz
-  alves_name: NAT
+  id: nat
+  label: noradrenaline transporter
   neurovault_id: 802965
-- id: 5ht1a
-  label: serotonin receptor 5HT1a
+- alves_name: 5HT1a
   hansen_file: 5HT1a_way_hc36_savli.nii
-  alves_name: 5HT1a
+  id: 5ht1a
+  label: serotonin receptor 5HT1a
   neurovault_id: 802954
-- id: 5ht1b
-  label: serotonin receptor 5HT1b
+- alves_name: 5HT1b
   hansen_file: 5HT1b_p943_hc65_gallezot.nii.gz
-  alves_name: 5HT1b
+  id: 5ht1b
+  label: serotonin receptor 5HT1b
   neurovault_id: 802955
-- id: 5ht2a
-  label: serotonin receptor 5HT2a
+- alves_name: 5HT2a
   hansen_file: 5HT2a_cimbi_hc29_beliveau.nii
-  alves_name: 5HT2a
+  id: 5ht2a
+  label: serotonin receptor 5HT2a
   neurovault_id: 802956
-- id: 5ht4
-  label: serotonin receptor 5HT4
+- alves_name: 5HT4
   hansen_file: 5HT4_sb20_hc59_beliveau.nii
-  alves_name: 5HT4
+  id: 5ht4
+  label: serotonin receptor 5HT4
   neurovault_id: 802957
-- id: 5ht6
-  label: serotonin receptor 5HT6
+- alves_name: 5HT6
   hansen_file: 5HT6_gsk_hc30_radhakrishnan.nii.gz
-  alves_name: 5HT6
+  id: 5ht6
+  label: serotonin receptor 5HT6
   neurovault_id: 802958
-- id: 5htt
-  label: serotonin transporter
+- alves_name: 5HTT
   hansen_file: 5HTT_dasb_hc100_beliveau.nii
-  alves_name: 5HTT
+  id: 5htt
+  label: serotonin transporter
   neurovault_id: 802959
 atlases:
   raw_dir: atlases/raw
